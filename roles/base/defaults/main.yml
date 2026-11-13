@@ -16,4 +16,3 @@ base_sysctl:
   kernel.unprivileged_bpf_disabled: 1
   fs.protected_symlinks: 1
   fs.protected_hardlinks: 1
-  # NB : ne pas toucher net.ipv4.ip_forward, Docker en a besoin.

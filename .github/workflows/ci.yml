@@ -39,8 +39,10 @@ jobs:
       - name: Collections
         run: ansible-galaxy collection install -r requirements.yml
       - name: Syntaxe
-        run: ansible-playbook site.yml --syntax-check
-        env:
-          ANSIBLE_VAULT_PASSWORD_FILE: /dev/null
+        # Le vrai mot de passe vault n'est jamais donné à la CI :
+        # syntax-check n'a pas besoin de déchiffrer, un mot de passe factice suffit.
+        run: |
+          echo dummy > "$RUNNER_TEMP/vault_pass"
+          ANSIBLE_VAULT_PASSWORD_FILE="$RUNNER_TEMP/vault_pass" ansible-playbook site.yml --syntax-check
       - name: ansible-lint
         run: ansible-lint

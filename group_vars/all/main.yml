@@ -36,9 +36,17 @@ caddy_version: "2.10"
 crowdsec_version: "v1.6.8"
 authelia_version: "4.39"
 whoami_version: "v1.10"
+# Images complètes (Podman n'a pas de registre implicite : on qualifie tout)
+images:
+  caddy_builder: "docker.io/library/caddy:{{ caddy_version }}-builder"
+  caddy: "docker.io/library/caddy:{{ caddy_version }}"
+  crowdsec: "docker.io/crowdsecurity/crowdsec:{{ crowdsec_version }}"
+  authelia: "docker.io/authelia/authelia:{{ authelia_version }}"
+  whoami: "docker.io/traefik/whoami:{{ whoami_version }}"
 
-# --- Stack ----------------------------------------------------------------
-stack_dir: /opt/stack
+# --- Stack (Podman rootless) ------------------------------------------------
+stack_user: stack                       # utilisateur non privilégié qui porte les conteneurs
+stack_dir: /home/stack/stack            # configs montées dans les conteneurs
 # Sous-domaines : public = sans SSO, protected = derrière Authelia (2FA)
 public_hosts:
   - name: www

@@ -1,11 +1,11 @@
 ---
-- name: Socle durci + Docker + stack exposée
+- name: Socle durci + Podman rootless + stack exposée
   hosts: selfhost
   become: true
   roles:
     - role: base
       tags: [base]
-    - role: docker
-      tags: [docker]
+    - role: podman
+      tags: [podman]
     - role: stack
       tags: [stack]

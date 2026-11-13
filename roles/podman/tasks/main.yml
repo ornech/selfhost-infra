@@ -1,0 +1,41 @@
+---
+# Podman rootless : les conteneurs tournent sous un utilisateur dédié, sans démon root.
+# Une évasion de conteneur aboutit à l'UID non privilégié "{{ stack_user }}", pas à root.
+
+- name: "Paquets Podman (Debian 13 : Podman 5, réseau pasta, Quadlet)"
+  ansible.builtin.apt:
+    name:
+      - podman
+      - passt              # pasta : réseau rootless, conserve l'IP source (utile à CrowdSec)
+      - netavark
+      - aardvark-dns       # résolution DNS entre conteneurs
+      - uidmap
+      - fuse-overlayfs
+      - dbus-user-session  # systemctl --user
+    state: present
+    update_cache: true
+
+- name: Utilisateur dédié à la stack (sans mot de passe ni shell)
+  ansible.builtin.user:
+    name: "{{ stack_user }}"
+    shell: /usr/sbin/nologin
+    password: "!"
+    create_home: true
+  register: podman_stack_account
+
+- name: Plages subuid/subgid présentes
+  ansible.builtin.command: "grep -q '^{{ stack_user }}:' {{ item }}"
+  changed_when: false
+  loop: [/etc/subuid, /etc/subgid]
+
+- name: Linger systemd (services utilisateur actifs sans session ouverte)
+  ansible.builtin.command: "loginctl enable-linger {{ stack_user }}"
+  args:
+    creates: "/var/lib/systemd/linger/{{ stack_user }}"
+
+- name: Ports < 1024 autorisés aux utilisateurs non privilégiés (80/443 en rootless)
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_unprivileged_port_start
+    value: "80"
+    sysctl_file: /etc/sysctl.d/80-rootless-ports.conf
+    reload: true

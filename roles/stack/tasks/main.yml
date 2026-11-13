@@ -1,54 +1,116 @@
 ---
-- name: Arborescence de la stack
-  ansible.builtin.file:
-    path: "{{ stack_dir }}/{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0750"
-  loop:
-    - ""
-    - caddy
-    - caddy/logs
-    - crowdsec
-    - authelia
+- name: UID de l'utilisateur de la stack
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ stack_user }}"
 
-- name: Dockerfile Caddy
-  ansible.builtin.template:
-    src: caddy.Dockerfile.j2
-    dest: "{{ stack_dir }}/caddy/Dockerfile"
-    mode: "0640"
-  register: stack_dockerfile
+- name: Variables d'exécution rootless
+  ansible.builtin.set_fact:
+    stack_uid: "{{ ansible_facts.getent_passwd[stack_user][1] }}"
+    stack_home: "{{ ansible_facts.getent_passwd[stack_user][4] }}"
 
-- name: Fichiers de configuration (non secrets)
-  ansible.builtin.template:
-    src: "{{ item.src }}"
-    dest: "{{ stack_dir }}/{{ item.dest }}"
-    mode: "0640"
-  loop:
-    - { src: compose.yml.j2, dest: compose.yml }
-    - { src: Caddyfile.j2, dest: caddy/Caddyfile }
-    - { src: crowdsec-acquis.yaml.j2, dest: crowdsec/acquis.yaml }
-  register: stack_configs
+- name: Déploiement rootless sous {{ stack_user }}
+  become: true
+  become_user: "{{ stack_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ stack_uid }}"
+  block:
+    # ------------------------------------------------------------ fichiers
+    - name: Arborescence
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ stack_dir }}"
+        - "{{ stack_dir }}/caddy"
+        - "{{ stack_dir }}/caddy/logs"
+        - "{{ stack_dir }}/crowdsec"
+        - "{{ stack_dir }}/authelia"
+        - "{{ stack_home }}/.secrets"
+        - "{{ stack_home }}/.config/containers/systemd"
 
-- name: Fichiers contenant des secrets
-  ansible.builtin.template:
-    src: "{{ item.src }}"
-    dest: "{{ stack_dir }}/{{ item.dest }}"
-    mode: "0600"
-  loop:
-    - { src: env.j2, dest: .env }
-    - { src: authelia-configuration.yml.j2, dest: authelia/configuration.yml }
-    - { src: authelia-users.yml.j2, dest: authelia/users.yml }
-  register: stack_secrets
-  no_log: true
+    - name: Containerfile Caddy (DNS-01 + bouncer CrowdSec)
+      ansible.builtin.template:
+        src: caddy.Containerfile.j2
+        dest: "{{ stack_dir }}/caddy/Containerfile"
+        mode: "0600"
+      register: stack_containerfile
 
-# Les fichiers montés ne sont pas vus par compose : on force la recréation
-# quand une config change, et la reconstruction de Caddy quand son Dockerfile change.
-- name: Construire et démarrer la stack
-  community.docker.docker_compose_v2:
-    project_src: "{{ stack_dir }}"
-    build: "{{ 'always' if stack_dockerfile.changed else 'policy' }}"
-    pull: missing
-    recreate: "{{ 'always' if (stack_configs.changed or stack_secrets.changed or stack_dockerfile.changed) else 'auto' }}"
-    state: present
+    - name: Configurations des services
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ stack_dir }}/{{ item.dest }}"
+        mode: "0600"
+      loop:
+        - { src: Caddyfile.j2, dest: caddy/Caddyfile }
+        - { src: crowdsec-acquis.yaml.j2, dest: crowdsec/acquis.yaml }
+        - { src: authelia-configuration.yml.j2, dest: authelia/configuration.yml }
+        - { src: authelia-users.yml.j2, dest: authelia/users.yml }
+      register: stack_configs
+
+    # ------------------------------------------------------------ secrets
+    # Chaque secret est d'abord écrit dans un fichier 0600 (détection de changement),
+    # puis (re)créé comme secret Podman uniquement s'il a changé.
+    - name: Fichiers sources des secrets
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ stack_home }}/.secrets/{{ item.name }}"
+        mode: "0600"
+      loop: "{{ stack_secrets }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: stack_secret_files
+      no_log: true
+
+    - name: Secrets Podman
+      ansible.builtin.command:
+        argv: [podman, secret, create, --replace, "{{ item.item.name }}", "{{ item.dest }}"]
+      loop: "{{ stack_secret_files.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.changed  # noqa: no-handler
+      changed_when: true
+      no_log: true
+
+    # ------------------------------------------------------------ images
+    - name: Images épinglées
+      containers.podman.podman_image:
+        name: "{{ item }}"
+      loop:
+        - "{{ images.crowdsec }}"
+        - "{{ images.authelia }}"
+        - "{{ images.whoami }}"
+
+    - name: Construction de Caddy (si absente ou Containerfile modifié)
+      containers.podman.podman_image:
+        name: "localhost/caddy-custom:{{ caddy_version }}"
+        path: "{{ stack_dir }}/caddy"
+        build:
+          file: "{{ stack_dir }}/caddy/Containerfile"
+        force: "{{ stack_containerfile.changed }}"
+
+    # ------------------------------------------------------------ Quadlet
+    - name: Unités Quadlet (réseaux + conteneurs)
+      ansible.builtin.template:
+        src: "quadlet/{{ item }}.j2"
+        dest: "{{ stack_home }}/.config/containers/systemd/{{ item }}"
+        mode: "0600"
+      loop: "{{ stack_quadlet_files }}"
+      register: stack_quadlets
+
+    - name: Générer les unités systemd à partir des fichiers Quadlet
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        scope: user
+
+    - name: Démarrer / redémarrer les services
+      ansible.builtin.systemd_service:
+        name: "{{ item }}.service"
+        scope: user
+        state: "{{ 'restarted' if stack_restart_needed else 'started' }}"
+      loop: "{{ stack_services }}"
+      vars:
+        stack_restart_needed: >-
+          {{ stack_containerfile.changed or stack_configs.changed
+             or stack_secret_files.changed or stack_quadlets.changed }}

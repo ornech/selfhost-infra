@@ -1,0 +1,24 @@
+# {{ ansible_managed }}
+[Unit]
+Description=CrowdSec (détection + décisions de blocage)
+
+[Container]
+ContainerName=crowdsec
+Image={{ images.crowdsec }}
+Network=stack-egress.network
+Network=stack-sec.network
+NoNewPrivileges=true
+Environment="COLLECTIONS=crowdsecurity/caddy crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+# Crée automatiquement le bouncer "caddy" avec cette clé
+Secret=crowdsec_bouncer_key,type=env,target=BOUNCER_KEY_caddy
+Volume={{ stack_dir }}/crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+Volume={{ stack_dir }}/caddy/logs:/var/log/caddy:ro
+Volume=crowdsec-db:/var/lib/crowdsec/data
+Volume=crowdsec-config:/etc/crowdsec
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

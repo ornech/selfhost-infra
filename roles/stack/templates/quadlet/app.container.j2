@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Application publique (placeholder : remplacer par ton image multi-arch)
+
+[Container]
+ContainerName=app
+Image={{ images.whoami }}
+Exec=--port 8080 --name app-publique
+Network=stack-backend.network
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

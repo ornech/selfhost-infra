@@ -17,7 +17,7 @@
       - ca-certificates
       - curl
       - gnupg
-      - python3-debian     # requis par deb822_repository (rôle docker)
+      - acl                # requis par Ansible pour become_user vers un compte non privilégié
     state: present
 
 # --- Compte d'administration (AVANT de durcir SSH pour ne pas se verrouiller)
@@ -69,7 +69,7 @@
     reload: true
   loop: "{{ base_sysctl | dict2items }}"
 
-# --- Pare-feu hôte (n'agit que sur INPUT ; Docker gère FORWARD)
+# --- Pare-feu hôte
 - name: Règles nftables de l'hôte
   ansible.builtin.template:
     src: nftables.conf.j2

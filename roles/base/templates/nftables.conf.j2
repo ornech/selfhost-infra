@@ -1,12 +1,13 @@
 #!/usr/sbin/nft -f
 # {{ ansible_managed }}
 #
-# Pas de "flush ruleset" : on ne détruit pas les tables créées par Docker.
+# Pas de "flush ruleset" : on ne détruit pas les tables créées par netavark.
 # On (re)crée uniquement notre propre table.
 #
-# ATTENTION : les ports publiés par Docker (80/443) passent par PREROUTING/DNAT
-# puis FORWARD, PAS par cette chaîne INPUT. Ce pare-feu protège les services
-# de l'hôte (SSH...), pas les conteneurs. Ne publier dans compose QUE 80/443.
+# Podman rootless : les ports publiés sont ouverts par pasta, un processus
+# de l'utilisateur "stack" qui écoute sur l'hôte. Le trafic passe donc par
+# cette chaîne INPUT (contrairement à Docker rootful et son DNAT/FORWARD) :
+# ce pare-feu protège réellement les ports exposés.
 
 table inet host_fw
 delete table inet host_fw
@@ -41,6 +42,10 @@ table inet host_fw {
     # SSH : uniquement depuis LAN/VPN d'administration, avec limitation
     tcp dport 22 ip saddr @admin_v4 ct state new limit rate 10/minute accept
     tcp dport 22 ip6 saddr @admin_v6 ct state new limit rate 10/minute accept
+
+    # Seuls services exposés : Caddy (HTTP, HTTPS, HTTP/3)
+    tcp dport { 80, 443 } accept
+    udp dport 443 accept
 
     # Journaliser le reste (limité) avant le drop
     limit rate 5/minute log prefix "nft-input-drop: " level info
