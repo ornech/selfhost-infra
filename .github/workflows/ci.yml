@@ -38,11 +38,13 @@ jobs:
         run: pip install ansible-core ansible-lint yamllint
       - name: Collections
         run: ansible-galaxy collection install -r requirements.yml
-      - name: Syntaxe
-        # Le vrai mot de passe vault n'est jamais donné à la CI :
-        # syntax-check n'a pas besoin de déchiffrer, un mot de passe factice suffit.
+      # Le vrai mot de passe vault n'est jamais donné à la CI :
+      # ni syntax-check ni ansible-lint n'ont besoin de déchiffrer, un mot de passe factice suffit.
+      - name: Mot de passe vault factice
         run: |
           echo dummy > "$RUNNER_TEMP/vault_pass"
-          ANSIBLE_VAULT_PASSWORD_FILE="$RUNNER_TEMP/vault_pass" ansible-playbook site.yml --syntax-check
+          echo "ANSIBLE_VAULT_PASSWORD_FILE=$RUNNER_TEMP/vault_pass" >> "$GITHUB_ENV"
+      - name: Syntaxe
+        run: ansible-playbook site.yml --syntax-check
       - name: ansible-lint
         run: ansible-lint
