@@ -1,4 +1,15 @@
 ---
+- name: Garde-fou - aucune valeur d'exemple ne doit rester
+  ansible.builtin.assert:
+    that:
+      - domain != 'example.fr'
+      - acme_email is not search('example\\.fr$')
+      - admin_ssh_pubkeys | select('search', 'remplace-moi') | list | length == 0
+    fail_msg: >-
+      Valeurs d'exemple encore présentes dans group_vars/all/main.yml
+      (domain, acme_email ou admin_ssh_pubkeys). Les renseigner avant de déployer.
+    quiet: true
+
 - name: Paquets à jour
   ansible.builtin.apt:
     update_cache: true

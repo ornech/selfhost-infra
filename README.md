@@ -39,28 +39,46 @@ CrowdSec aveugle. Sur l'hôte, HAProxy voit les vraies IP, s'isole lui-même
 
 ## Mise en route
 
-```bash
-# 1. Outils (poste d'administration)
-pip install ansible-core
-ansible-galaxy collection install -r requirements.yml
-sudo apt install skopeo python3-yaml     # pour scripts/pin-digests.sh
+Exécuter les étapes **une par une** (pas tout le bloc d'un coup) : chacune doit
+réussir avant la suivante.
 
-# 2. Secrets
-echo 'un-mot-de-passe-long' > .vault_pass && chmod 600 .vault_pass
+```bash
+# 1. Outils : paquets Debian (signés, et contenant déjà les collections
+#    ansible.posix, community.general, containers.podman). Pas de pip.
+sudo apt install ansible skopeo python3-yaml git
+ansible --version
+ansible-galaxy collection list containers.podman ansible.posix community.general
+
+# 2. Mot de passe du vault : aléatoire, jamais versionné (.gitignore)
+openssl rand -base64 32 > .vault_pass && chmod 600 .vault_pass
+
+# 3. Secrets
 cp group_vars/all/vault.yml.example group_vars/all/vault.yml
-$EDITOR group_vars/all/vault.yml
+nano group_vars/all/vault.yml
 ansible-vault encrypt group_vars/all/vault.yml
 
-# 3. Variables : domaine, clé SSH, CIDR d'admin, plugin DNS, applications
-$EDITOR group_vars/all/main.yml inventory/hosts.yml
+# 4. Variables : domaine, clé SSH, réseaux d'admin, plugin DNS, applications
+nano group_vars/all/main.yml
+nano inventory/hosts.yml
 
-# 4. Épingler les images par empreinte, recopier le résultat dans main.yml
+# 5. Épingler les images par empreinte, recopier le résultat dans main.yml
 scripts/pin-digests.sh
 
-# 5. Déployer
-ansible-playbook site.yml --check --diff
-ansible-playbook site.yml
+# 6. Déployer (-K : mot de passe sudo du compte courant)
+ansible-playbook site.yml --check --diff -K
+ansible-playbook site.yml -K
 ```
+
+### Avant le premier passage : ne pas se couper l'accès
+
+Le rôle `base` interdit la connexion SSH par mot de passe. Avant de le jouer :
+
+- vérifier que ta clé publique est dans `~/.ssh/authorized_keys` du compte
+  indiqué en `ansible_user` (sinon il ne restera que la console de Freebox OS) ;
+- vérifier que le réseau depuis lequel tu te connectes est bien dans
+  `admin_cidrs_v4` (`ip -4 addr` sur ton poste) ;
+- garder une session SSH ouverte pendant le premier passage, et en tester une
+  **nouvelle** avant de fermer l'ancienne.
 
 `acme_staging: true` par défaut : le certificat vient de l'autorité de **test**
 de Let's Encrypt (avertissement navigateur, pas de limite de débit). Une fois la
