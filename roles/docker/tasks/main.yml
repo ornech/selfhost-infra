@@ -1,0 +1,38 @@
+---
+- name: Dépôt APT officiel Docker (ARM64 sur la VM Freebox, AMD64 sur serveur x86)
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/debian
+    suites: ["{{ ansible_distribution_release }}"]
+    components: [stable]
+    architectures: ["{{ docker_arch_map[ansible_architecture] }}"]
+    signed_by: https://download.docker.com/linux/debian/gpg
+    state: present
+
+- name: Paquets Docker
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Configuration du démon Docker
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: "{{ docker_daemon_config | to_nice_json }}\n"
+  notify: Redémarrer Docker
+
+- name: Service Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Appliquer la config Docker avant de déployer la stack
+  ansible.builtin.meta: flush_handlers

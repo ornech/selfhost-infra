@@ -1,0 +1,14 @@
+---
+docker_arch_map:
+  aarch64: arm64
+  x86_64: amd64
+
+docker_daemon_config:
+  no-new-privileges: true      # aucun conteneur ne peut gagner de privilèges (setuid...)
+  icc: false                   # pas de trafic inter-conteneurs sur le bridge par défaut
+  userland-proxy: false        # DNAT noyau au lieu du proxy userland
+  live-restore: true           # les conteneurs survivent à un redémarrage du démon
+  log-driver: json-file
+  log-opts:
+    max-size: "10m"
+    max-file: "3"

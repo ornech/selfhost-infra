@@ -1,0 +1,24 @@
+---
+# Copier en vault.yml, remplir, puis : ansible-vault encrypt group_vars/all/vault.yml
+# Ne JAMAIS committer vault.yml en clair (la CI le refuse).
+
+# Secrets DNS-01 : une clé par entrée de caddy_dns_env_keys
+vault_caddy_dns_env:
+  DNS_API_TOKEN: "token-api-dns-limite-a-la-zone"
+
+# Clé partagée Caddy <-> CrowdSec (openssl rand -hex 32)
+vault_crowdsec_bouncer_key: "changeme"
+
+# Authelia (openssl rand -hex 64 pour chacun)
+vault_authelia_jwt_secret: "changeme"
+vault_authelia_session_secret: "changeme"
+vault_authelia_storage_key: "changeme"
+
+# Utilisateurs Authelia. Hash généré par :
+#   docker run --rm authelia/authelia:4.39 authelia crypto hash generate argon2
+vault_authelia_users:
+  jf:
+    displayname: "JF"
+    email: "jf@example.fr"
+    password: "$argon2id$v=19$m=65536,t=3,p=4$..."
+    groups: [admins]

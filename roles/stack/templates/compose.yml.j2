@@ -1,0 +1,88 @@
+# {{ ansible_managed }}
+name: stack
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs:
+    - /tmp
+
+networks:
+  # Seul réseau avec accès Internet : ACME (Caddy) et hub/CAPI (CrowdSec)
+  egress: {}
+  # Backends : réseau interne, aucune sortie vers Internet
+  backend:
+    internal: true
+  # Caddy <-> CrowdSec LAPI
+  sec:
+    internal: true
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+  crowdsec_db: {}
+  crowdsec_config: {}
+
+services:
+  caddy:
+    <<: *hardening
+    build: ./caddy
+    image: local/caddy-custom:{{ caddy_version }}
+    cap_add: [NET_BIND_SERVICE]
+    ports:
+      # Les SEULS ports publiés de toute la stack
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    env_file: .env
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/logs:/var/log/caddy
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [egress, backend, sec]
+    depends_on: [crowdsec, authelia]
+
+  crowdsec:
+    image: crowdsecurity/crowdsec:{{ crowdsec_version }}
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      COLLECTIONS: >-
+        crowdsecurity/caddy
+        crowdsecurity/http-cve
+        crowdsecurity/base-http-scenarios
+      # Crée automatiquement le bouncer "caddy" avec cette clé
+      BOUNCER_KEY_caddy: ${CROWDSEC_BOUNCER_KEY}
+    volumes:
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - ./caddy/logs:/var/log/caddy:ro
+      - crowdsec_db:/var/lib/crowdsec/data
+      - crowdsec_config:/etc/crowdsec
+    networks: [egress, sec]
+
+  authelia:
+    <<: *hardening
+    image: authelia/authelia:{{ authelia_version }}
+    volumes:
+      - ./authelia:/config
+    networks: [backend]
+
+  # --- Applications ---------------------------------------------------------
+  # Placeholder public : remplacer par ton application (image multi-arch !)
+  app:
+    <<: *hardening
+    image: traefik/whoami:{{ whoami_version }}
+    command: ["--port", "8080", "--name", "app-publique"]
+    networks: [backend]
+
+  # Démo d'un service protégé par Authelia
+  whoami:
+    <<: *hardening
+    image: traefik/whoami:{{ whoami_version }}
+    command: ["--port", "8080", "--name", "service-protege"]
+    networks: [backend]

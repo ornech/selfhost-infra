@@ -1,0 +1,11 @@
+---
+- name: Socle durci + Docker + stack exposée
+  hosts: selfhost
+  become: true
+  roles:
+    - role: base
+      tags: [base]
+    - role: docker
+      tags: [docker]
+    - role: stack
+      tags: [stack]

@@ -1,0 +1,9 @@
+# Mot de passe du vault : jamais dans Git
+.vault_pass
+*.vault_pass
+
+# Rendus locaux / tests
+.render/
+*.retry
+__pycache__/
+.venv/

@@ -1,0 +1,48 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+#
+# Pas de "flush ruleset" : on ne détruit pas les tables créées par Docker.
+# On (re)crée uniquement notre propre table.
+#
+# ATTENTION : les ports publiés par Docker (80/443) passent par PREROUTING/DNAT
+# puis FORWARD, PAS par cette chaîne INPUT. Ce pare-feu protège les services
+# de l'hôte (SSH...), pas les conteneurs. Ne publier dans compose QUE 80/443.
+
+table inet host_fw
+delete table inet host_fw
+
+table inet host_fw {
+  set admin_v4 {
+    type ipv4_addr
+    flags interval
+{% if admin_cidrs_v4 %}
+    elements = { {{ admin_cidrs_v4 | join(', ') }} }
+{% endif %}
+  }
+  set admin_v6 {
+    type ipv6_addr
+    flags interval
+{% if admin_cidrs_v6 %}
+    elements = { {{ admin_cidrs_v6 | join(', ') }} }
+{% endif %}
+  }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+
+    iif lo accept
+    ct state established,related accept
+    ct state invalid drop
+
+    # ICMP / ICMPv6 indispensables (ND, PMTUD)
+    meta l4proto icmp accept
+    meta l4proto ipv6-icmp accept
+
+    # SSH : uniquement depuis LAN/VPN d'administration, avec limitation
+    tcp dport 22 ip saddr @admin_v4 ct state new limit rate 10/minute accept
+    tcp dport 22 ip6 saddr @admin_v6 ct state new limit rate 10/minute accept
+
+    # Journaliser le reste (limité) avant le drop
+    limit rate 5/minute log prefix "nft-input-drop: " level info
+  }
+}

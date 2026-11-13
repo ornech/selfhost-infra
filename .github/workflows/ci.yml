@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets (vault chiffré + gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Le vault doit être chiffré
+        run: |
+          f=group_vars/all/vault.yml
+          if [ -f "$f" ] && ! head -n1 "$f" | grep -q '^\$ANSIBLE_VAULT;'; then
+            echo "::error file=$f::vault.yml est en clair ! ansible-vault encrypt $f"
+            exit 1
+          fi
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    name: Lint Ansible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Outils
+        run: pip install ansible-core ansible-lint yamllint
+      - name: Collections
+        run: ansible-galaxy collection install -r requirements.yml
+      - name: Syntaxe
+        run: ansible-playbook site.yml --syntax-check
+        env:
+          ANSIBLE_VAULT_PASSWORD_FILE: /dev/null
+      - name: ansible-lint
+        run: ansible-lint

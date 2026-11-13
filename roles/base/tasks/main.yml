@@ -1,0 +1,88 @@
+---
+- name: Paquets à jour
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: safe
+    cache_valid_time: 3600
+
+- name: Paquets de base
+  ansible.builtin.apt:
+    name:
+      - unattended-upgrades
+      - apt-listchanges
+      - nftables
+      - apparmor
+      - apparmor-utils
+      - sudo
+      - ca-certificates
+      - curl
+      - gnupg
+      - python3-debian     # requis par deb822_repository (rôle docker)
+    state: present
+
+# --- Compte d'administration (AVANT de durcir SSH pour ne pas se verrouiller)
+- name: Utilisateur d'administration
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups: sudo
+    append: true
+    shell: /bin/bash
+    password: "!"          # pas de mot de passe : connexion par clé uniquement
+
+- name: Clés SSH de l'administrateur
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ admin_ssh_pubkeys | join('\n') }}"
+    exclusive: true
+
+- name: Sudo sans mot de passe pour l'admin (compte sans mot de passe)
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/90-{{ admin_user }}"
+    content: "{{ admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+# --- SSH
+- name: Durcissement sshd
+  ansible.builtin.template:
+    src: sshd-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/10-hardening.conf
+    mode: "0644"
+  notify: Vérifier et recharger sshd
+
+# --- Mises à jour de sécurité automatiques
+- name: Activer unattended-upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+
+# --- Noyau
+- name: Sysctl réseau et noyau
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/90-hardening.conf
+    reload: true
+  loop: "{{ base_sysctl | dict2items }}"
+
+# --- Pare-feu hôte (n'agit que sur INPUT ; Docker gère FORWARD)
+- name: Règles nftables de l'hôte
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0644"
+    validate: /usr/sbin/nft -c -f %s
+  notify: Recharger nftables
+
+- name: Service nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Appliquer les handlers avant la suite
+  ansible.builtin.meta: flush_handlers

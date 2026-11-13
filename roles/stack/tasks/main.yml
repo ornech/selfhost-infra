@@ -1,0 +1,54 @@
+---
+- name: Arborescence de la stack
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - ""
+    - caddy
+    - caddy/logs
+    - crowdsec
+    - authelia
+
+- name: Dockerfile Caddy
+  ansible.builtin.template:
+    src: caddy.Dockerfile.j2
+    dest: "{{ stack_dir }}/caddy/Dockerfile"
+    mode: "0640"
+  register: stack_dockerfile
+
+- name: Fichiers de configuration (non secrets)
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ stack_dir }}/{{ item.dest }}"
+    mode: "0640"
+  loop:
+    - { src: compose.yml.j2, dest: compose.yml }
+    - { src: Caddyfile.j2, dest: caddy/Caddyfile }
+    - { src: crowdsec-acquis.yaml.j2, dest: crowdsec/acquis.yaml }
+  register: stack_configs
+
+- name: Fichiers contenant des secrets
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ stack_dir }}/{{ item.dest }}"
+    mode: "0600"
+  loop:
+    - { src: env.j2, dest: .env }
+    - { src: authelia-configuration.yml.j2, dest: authelia/configuration.yml }
+    - { src: authelia-users.yml.j2, dest: authelia/users.yml }
+  register: stack_secrets
+  no_log: true
+
+# Les fichiers montés ne sont pas vus par compose : on force la recréation
+# quand une config change, et la reconstruction de Caddy quand son Dockerfile change.
+- name: Construire et démarrer la stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ stack_dir }}"
+    build: "{{ 'always' if stack_dockerfile.changed else 'policy' }}"
+    pull: missing
+    recreate: "{{ 'always' if (stack_configs.changed or stack_secrets.changed or stack_dockerfile.changed) else 'auto' }}"
+    state: present

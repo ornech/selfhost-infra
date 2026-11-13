@@ -1,0 +1,48 @@
+---
+# --- Identité ---------------------------------------------------------------
+domain: example.fr                 # ton nom de domaine
+acme_email: admin@example.fr       # contact Let's Encrypt
+
+# --- Administration --------------------------------------------------------
+admin_user: jf
+admin_ssh_pubkeys:
+  - "ssh-ed25519 AAAA...remplace-moi jf@poste"
+# Réseaux autorisés en SSH : LAN + plage WireGuard (Freebox OS ou OPNsense)
+admin_cidrs_v4:
+  - 192.168.1.0/24
+  - 192.168.27.64/27            # plage VPN de la Freebox : à vérifier dans Freebox OS
+admin_cidrs_v6: []
+
+# --- DNS-01 (certificat wildcard, aucun sous-domaine dans les logs CT) -----
+# Module Caddy à compiler : cloudflare, gandi, ovh, ...
+# Liste : https://github.com/caddy-dns
+caddy_dns_module: cloudflare
+# Bloc "dns" injecté dans la directive tls du Caddyfile.
+# Les variables {env.X} sont lues depuis le .env généré à partir du vault.
+# Exemple OVH :
+#   ovh {
+#     endpoint ovh-eu
+#     application_key {env.OVH_APP_KEY}
+#     application_secret {env.OVH_APP_SECRET}
+#     consumer_key {env.OVH_CONSUMER_KEY}
+#   }
+caddy_dns_block: "cloudflare {env.DNS_API_TOKEN}"
+# Noms des variables d'environnement à passer à Caddy (valeurs dans le vault)
+caddy_dns_env_keys:
+  - DNS_API_TOKEN
+
+# --- Versions épinglées (à mettre à jour volontairement, cf. README) -------
+caddy_version: "2.10"
+crowdsec_version: "v1.6.8"
+authelia_version: "4.39"
+whoami_version: "v1.10"
+
+# --- Stack ----------------------------------------------------------------
+stack_dir: /opt/stack
+# Sous-domaines : public = sans SSO, protected = derrière Authelia (2FA)
+public_hosts:
+  - name: www
+    upstream: app:8080
+protected_hosts:
+  - name: whoami
+    upstream: whoami:8080

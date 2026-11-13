@@ -1,0 +1,8 @@
+---
+profile: production
+exclude_paths:
+  - .github/
+  - .render/
+  - group_vars/all/vault.yml
+skip_list:
+  - var-naming[no-role-prefix]   # variables partagées entre rôles via group_vars
