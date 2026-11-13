@@ -1,0 +1,7 @@
+---
+# Requêtes HTTP max par IP sur 10 s avant réponse 429
+haproxy_rate_limit: 100
+
+edge_cert_pem: "/etc/haproxy/certs/{{ domain }}.pem"
+edge_certbot_credentials: "/etc/letsencrypt/dns-{{ certbot_dns_plugin }}.ini"
+edge_acme_mode: "{{ 'staging' if acme_staging else 'production' }}"

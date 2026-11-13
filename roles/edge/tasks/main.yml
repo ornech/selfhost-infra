@@ -1,0 +1,192 @@
+---
+# Périmètre exposé, entièrement en paquets (APT signé, mises à jour de sécurité
+# automatiques via unattended-upgrades pour les paquets Debian).
+
+# =============================================================== HAProxy
+- name: HAProxy (paquet Debian)
+  ansible.builtin.apt:
+    name: haproxy
+    state: present
+  notify: Redémarrer rsyslog   # active le socket de log dans le chroot HAProxy
+
+- name: Répertoire des certificats HAProxy
+  ansible.builtin.file:
+    path: /etc/haproxy/certs
+    state: directory
+    owner: root
+    group: haproxy
+    mode: "0750"
+
+# =============================================================== certbot (DNS-01)
+- name: Certbot et son plugin DNS (paquets Debian)
+  ansible.builtin.apt:
+    name:
+      - certbot
+      - "python3-certbot-dns-{{ certbot_dns_plugin }}"
+    state: present
+
+- name: Répertoires certbot
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/letsencrypt
+    - /etc/letsencrypt/renewal-hooks
+    - /etc/letsencrypt/renewal-hooks/deploy
+
+- name: Identifiants de l'API DNS (limités à la zone)
+  ansible.builtin.copy:
+    content: "{{ vault_certbot_dns_credentials }}"
+    dest: "{{ edge_certbot_credentials }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Hook de déploiement (assemble le PEM pour HAProxy et recharge)
+  ansible.builtin.template:
+    src: certbot-deploy-haproxy.sh.j2
+    dest: /etc/letsencrypt/renewal-hooks/deploy/haproxy.sh
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Certificat existant ?
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ domain }}/fullchain.pem"
+  register: edge_cert
+
+- name: Autorité utilisée lors de la dernière émission
+  ansible.builtin.slurp:
+    src: /etc/letsencrypt/.ansible-acme-mode
+  register: edge_acme_marker
+  failed_when: false
+
+- name: Émettre le certificat wildcard (première fois, ou changement test -> production)
+  ansible.builtin.command:
+    argv: >-
+      {{ ['certbot', 'certonly', '--non-interactive', '--agree-tos',
+          '--email', acme_email,
+          '--cert-name', domain,
+          '--key-type', 'ecdsa',
+          '--dns-' ~ certbot_dns_plugin,
+          '--dns-' ~ certbot_dns_plugin ~ '-credentials', edge_certbot_credentials,
+          '--dns-' ~ certbot_dns_plugin ~ '-propagation-seconds', certbot_dns_propagation_seconds | string,
+          '-d', domain, '-d', '*.' ~ domain]
+         + (['--test-cert'] if acme_staging else [])
+         + (['--force-renewal'] if edge_cert.stat.exists else []) }}
+  when: >-
+    not edge_cert.stat.exists
+    or (edge_acme_marker.content | default('') | b64decode | trim) != edge_acme_mode
+  register: edge_issue
+  changed_when: true
+
+- name: Mémoriser l'autorité utilisée
+  ansible.builtin.copy:
+    content: "{{ edge_acme_mode }}\n"
+    dest: /etc/letsencrypt/.ansible-acme-mode
+    mode: "0644"
+
+- name: PEM HAProxy présent ?
+  ansible.builtin.stat:
+    path: "{{ edge_cert_pem }}"
+  register: edge_pem
+
+- name: Assembler le PEM HAProxy (le hook ne tourne seul qu'aux renouvellements)
+  ansible.builtin.command: /etc/letsencrypt/renewal-hooks/deploy/haproxy.sh
+  environment:
+    RENEWED_LINEAGE: "/etc/letsencrypt/live/{{ domain }}"
+  when: edge_issue is changed or not edge_pem.stat.exists
+  changed_when: true
+
+- name: Renouvellement automatique (timer systemd fourni par le paquet)
+  ansible.builtin.systemd_service:
+    name: certbot.timer
+    enabled: true
+    state: started
+
+# =============================================================== Configuration HAProxy
+- name: Réseaux autorisés sur le frontal privé
+  ansible.builtin.copy:
+    content: "{{ (admin_cidrs_v4 + admin_cidrs_v6) | join('\n') }}\n"
+    dest: /etc/haproxy/admin.lst
+    owner: root
+    group: haproxy
+    mode: "0640"
+  notify: Recharger HAProxy
+
+- name: Configuration HAProxy (validée par haproxy -c avant installation)
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: haproxy
+    mode: "0640"
+    validate: haproxy -c -f %s
+  notify: Recharger HAProxy
+
+- name: Service HAProxy
+  ansible.builtin.systemd_service:
+    name: haproxy
+    enabled: true
+    state: started
+
+# =============================================================== CrowdSec
+- name: Dépôt APT CrowdSec (signé)
+  ansible.builtin.deb822_repository:
+    name: crowdsec
+    types: [deb]
+    uris: "{{ crowdsec_apt_uri }}"
+    suites: ["{{ crowdsec_apt_suite }}"]
+    components: [main]
+    signed_by: https://packagecloud.io/crowdsec/crowdsec/gpgkey
+    state: present
+
+- name: Moteur CrowdSec
+  ansible.builtin.apt:
+    name: crowdsec
+    state: present
+    update_cache: true
+
+# Installé APRÈS le moteur : son script d'installation l'enregistre
+# automatiquement auprès de l'API locale.
+- name: Bouncer nftables (bloque au niveau noyau, avant HAProxy)
+  ansible.builtin.apt:
+    name: crowdsec-firewall-bouncer-nftables
+    state: present
+
+- name: Acquisition des journaux HAProxy
+  ansible.builtin.copy:
+    dest: /etc/crowdsec/acquis.d/haproxy.yaml
+    mode: "0644"
+    content: |
+      # Fichier écrit par rsyslog (format syslog) : type "syslog", cf. note du hub CrowdSec
+      filenames:
+        - /var/log/haproxy.log
+      labels:
+        type: syslog
+  notify: Recharger CrowdSec
+
+- name: Collections installées
+  ansible.builtin.command: cscli collections list -o json
+  register: edge_cs_collections
+  changed_when: false
+
+- name: Installer les collections manquantes
+  ansible.builtin.command:
+    argv: [cscli, collections, install, "{{ item }}"]
+  loop: >-
+    {{ crowdsec_collections
+       | difference((edge_cs_collections.stdout | from_json).collections | default([]) | map(attribute='name') | list) }}
+  changed_when: true
+  notify: Recharger CrowdSec
+
+- name: Services CrowdSec
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [crowdsec, crowdsec-firewall-bouncer]

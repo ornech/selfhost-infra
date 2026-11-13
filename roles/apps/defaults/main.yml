@@ -1,0 +1,7 @@
+---
+# Une unité Quadlet par application : app-pub-<nom> / app-priv-<nom>
+apps_units: >-
+  {{ (public_hosts | map('combine', {'kind': 'pub'}) | list)
+     + (private_hosts | map('combine', {'kind': 'priv'}) | list) }}
+
+apps_secrets: "{{ vault_app_secrets | default({}) | dict2items(key_name='name', value_name='value') }}"

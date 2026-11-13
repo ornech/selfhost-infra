@@ -1,0 +1,117 @@
+# {{ ansible_managed }}
+#
+# Seul composant exposé à Internet. Lecture conseillée de haut en bas :
+#   global/defaults  -> durcissement TLS, délais anti-slowloris, journaux
+#   fe_public  :80/:443  -> sous-domaines publics, limitation de débit
+#   fe_private :8443     -> sous-domaines privés, réseaux d'admin uniquement
+#   backends             -> applications Podman sur 127.0.0.1
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    maxconn 4096
+
+    # TLS : profil "intermediate" de Mozilla (TLS 1.2 minimum)
+    ssl-default-bind-curves X25519:prime256v1:secp384r1
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    ssl-default-bind-options prefer-client-ciphers ssl-min-ver TLSv1.2 no-tls-tickets
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    option  forwardfor
+    timeout connect         5s
+    timeout client          30s
+    timeout server          30s
+    timeout http-request    10s     # requête complète en 10 s max (slowloris)
+    timeout http-keep-alive 5s
+    timeout queue           30s
+    errorfile 400 /etc/haproxy/errors/400.http
+    errorfile 403 /etc/haproxy/errors/403.http
+    errorfile 408 /etc/haproxy/errors/408.http
+    errorfile 500 /etc/haproxy/errors/500.http
+    errorfile 502 /etc/haproxy/errors/502.http
+    errorfile 503 /etc/haproxy/errors/503.http
+    errorfile 504 /etc/haproxy/errors/504.http
+
+# --------------------------------------------------------------------------
+# Frontal public
+# --------------------------------------------------------------------------
+frontend fe_public
+    bind :80
+    bind :443 ssl crt {{ edge_cert_pem }} alpn h2,http/1.1
+
+    # Table de suivi : débit de requêtes par IP source sur 10 s
+    stick-table type ip size 100k expire 10m store http_req_rate(10s)
+
+    acl host_apex req.hdr(host),field(1,:),lower -m str {{ domain }}
+{% for h in public_hosts %}
+    acl host_{{ h.name }} req.hdr(host),field(1,:),lower -m str {{ h.name }}.{{ domain }}
+{% endfor %}
+
+    http-request redirect scheme https code 301 unless { ssl_fc }
+    http-request track-sc0 src
+    http-request deny deny_status 429 if { sc_http_req_rate(0) gt {{ haproxy_rate_limit }} }
+    http-request redirect location https://www.{{ domain }}%[capture.req.uri] code 301 if host_apex
+    http-request set-header X-Forwarded-Proto https
+
+    http-after-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    http-after-response set-header X-Content-Type-Options nosniff
+    http-after-response set-header X-Frame-Options DENY
+    http-after-response set-header Referrer-Policy strict-origin-when-cross-origin
+    http-after-response del-header Server
+    http-after-response del-header X-Powered-By
+
+{% for h in public_hosts %}
+    use_backend be_pub_{{ h.name }} if host_{{ h.name }}
+{% endfor %}
+    # Sous-domaine inconnu (scanners, énumération) : on coupe sans répondre
+    default_backend be_drop
+
+# --------------------------------------------------------------------------
+# Frontal privé : filtré par nftables ET ici (défense en profondeur)
+# --------------------------------------------------------------------------
+frontend fe_private
+    bind :8443 ssl crt {{ edge_cert_pem }} alpn h2,http/1.1
+
+    acl from_admin src -f /etc/haproxy/admin.lst
+{% for h in private_hosts %}
+    acl host_{{ h.name }} req.hdr(host),field(1,:),lower -m str {{ h.name }}.{{ domain }}
+{% endfor %}
+
+    http-request deny deny_status 403 unless from_admin
+    http-request set-header X-Forwarded-Proto https
+
+    http-after-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    http-after-response set-header X-Content-Type-Options nosniff
+    http-after-response del-header Server
+
+{% for h in private_hosts %}
+    use_backend be_priv_{{ h.name }} if host_{{ h.name }}
+{% endfor %}
+    default_backend be_drop
+
+# --------------------------------------------------------------------------
+# Backends : applications Podman rootless, sur la boucle locale uniquement
+# --------------------------------------------------------------------------
+{% for h in public_hosts %}
+backend be_pub_{{ h.name }}
+    server {{ h.name }} 127.0.0.1:{{ h.port }} check inter 10s
+
+{% endfor %}
+{% for h in private_hosts %}
+backend be_priv_{{ h.name }}
+    server {{ h.name }} 127.0.0.1:{{ h.port }} check inter 10s
+
+{% endfor %}
+backend be_drop
+    http-request silent-drop

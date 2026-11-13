@@ -1,0 +1,89 @@
+---
+# Chaîne d'approvisionnement : une image référencée par tag peut changer sous
+# nos pieds ; une empreinte sha256 non. On refuse donc les tags seuls.
+- name: Toutes les images sont épinglées par empreinte
+  ansible.builtin.assert:
+    that: images | dict2items | rejectattr('value', 'search', '@sha256:[0-9a-f]{64}$') | list | length == 0
+    fail_msg: >-
+      Images non épinglées : {{ images | dict2items | rejectattr('value', 'search', '@sha256:[0-9a-f]{64}$')
+      | map(attribute='key') | join(', ') }}. Lancer scripts/pin-digests.sh et reporter le résultat
+      dans group_vars/all/main.yml (ou images_require_digest: false, en test seulement).
+    quiet: true
+  when: images_require_digest
+
+- name: UID de l'utilisateur des applications
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ stack_user }}"
+
+- name: Variables d'exécution rootless
+  ansible.builtin.set_fact:
+    apps_uid: "{{ ansible_facts.getent_passwd[stack_user][1] }}"
+    apps_home: "{{ ansible_facts.getent_passwd[stack_user][4] }}"
+
+- name: Déploiement rootless sous {{ stack_user }}
+  become: true
+  become_user: "{{ stack_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ apps_uid }}"
+  block:
+    - name: Arborescence
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0700"
+      loop:
+        - "{{ apps_home }}/.secrets"
+        - "{{ apps_home }}/.config/containers/systemd"
+
+    # Secret écrit d'abord dans un fichier 0600 (détection de changement),
+    # puis (re)créé dans Podman uniquement s'il a changé.
+    - name: Fichiers sources des secrets
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ apps_home }}/.secrets/{{ item.name }}"
+        mode: "0600"
+      loop: "{{ apps_secrets }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: apps_secret_files
+      no_log: true
+
+    - name: Secrets Podman
+      ansible.builtin.command:
+        argv: [podman, secret, create, --replace, "{{ item.item.name }}", "{{ item.dest }}"]
+      loop: "{{ apps_secret_files.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.changed  # noqa: no-handler
+      changed_when: true
+      no_log: true
+
+    - name: Images (par empreinte)
+      containers.podman.podman_image:
+        name: "{{ item }}"
+      loop: "{{ apps_units | map(attribute='image') | unique | map('extract', images) | list }}"
+
+    - name: Unités Quadlet
+      ansible.builtin.template:
+        src: app.container.j2
+        dest: "{{ apps_home }}/.config/containers/systemd/app-{{ item.kind }}-{{ item.name }}.container"
+        mode: "0600"
+      loop: "{{ apps_units }}"
+      loop_control:
+        label: "app-{{ item.kind }}-{{ item.name }}"
+      register: apps_quadlets
+
+    - name: Générer les unités systemd à partir des fichiers Quadlet
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        scope: user
+
+    - name: Démarrer / redémarrer les applications
+      ansible.builtin.systemd_service:
+        name: "app-{{ item.item.kind }}-{{ item.item.name }}.service"
+        scope: user
+        state: "{{ 'restarted' if (item.changed or apps_secret_files.changed) else 'started' }}"
+      loop: "{{ apps_quadlets.results }}"
+      loop_control:
+        label: "app-{{ item.item.kind }}-{{ item.item.name }}"

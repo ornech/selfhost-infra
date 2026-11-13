@@ -1,0 +1,19 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Appelé par certbot après chaque renouvellement réussi (et par Ansible à la
+# première émission). HAProxy veut la chaîne et la clé dans un seul fichier.
+set -eu
+
+: "${RENEWED_LINEAGE:?variable fournie par certbot}"
+dest="{{ edge_cert_pem }}"
+tmp="$(mktemp "${dest}.XXXXXX")"
+
+cat "$RENEWED_LINEAGE/fullchain.pem" "$RENEWED_LINEAGE/privkey.pem" > "$tmp"
+chown root:haproxy "$tmp"
+chmod 0640 "$tmp"
+mv -f "$tmp" "$dest"            # remplacement atomique
+
+# Rechargement sans coupure, uniquement si la configuration est valide
+if systemctl is-active --quiet haproxy && haproxy -c -q -f /etc/haproxy/haproxy.cfg; then
+  systemctl reload haproxy
+fi

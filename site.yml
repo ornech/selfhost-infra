@@ -1,11 +1,13 @@
 ---
-- name: Socle durci + Podman rootless + stack exposée
+- name: Socle durci, périmètre (HAProxy + CrowdSec) sur l'hôte, applications en Podman rootless
   hosts: selfhost
   become: true
   roles:
-    - role: base
+    - role: base       # SSH, nftables, mises à jour, sysctl, journaux
       tags: [base]
-    - role: podman
+    - role: edge       # certbot (DNS-01), HAProxy, CrowdSec + bouncer nftables
+      tags: [edge]
+    - role: podman     # Podman rootless, utilisateur dédié
       tags: [podman]
-    - role: stack
-      tags: [stack]
+    - role: apps       # applications en unités Quadlet, sur 127.0.0.1
+      tags: [apps]

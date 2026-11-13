@@ -1,56 +1,65 @@
 ---
+# ============================================================================
+# Variables non secrètes. Les secrets sont dans vault.yml (chiffré).
+# ============================================================================
+
 # --- Identité ---------------------------------------------------------------
 domain: example.fr                 # ton nom de domaine
 acme_email: admin@example.fr       # contact Let's Encrypt
+# true = autorité de TEST Let's Encrypt (certificat non reconnu par les
+# navigateurs, mais pas de limite de débit). À utiliser pendant la phase VM.
+acme_staging: true
 
 # --- Administration --------------------------------------------------------
 admin_user: jf
 admin_ssh_pubkeys:
   - "ssh-ed25519 AAAA...remplace-moi jf@poste"
-# Réseaux autorisés en SSH : LAN + plage WireGuard (Freebox OS ou OPNsense)
+# Réseaux d'administration : LAN + plage du VPN WireGuard.
+# Servent à : SSH (nftables) et frontal privé :8443 (nftables + HAProxy).
 admin_cidrs_v4:
   - 192.168.1.0/24
   - 192.168.27.64/27            # plage VPN de la Freebox : à vérifier dans Freebox OS
 admin_cidrs_v6: []
 
-# --- DNS-01 (certificat wildcard, aucun sous-domaine dans les logs CT) -----
-# Module Caddy à compiler : cloudflare, gandi, ovh, ...
-# Liste : https://github.com/caddy-dns
-caddy_dns_module: cloudflare
-# Bloc "dns" injecté dans la directive tls du Caddyfile.
-# Les variables {env.X} sont lues depuis le .env généré à partir du vault.
-# Exemple OVH :
-#   ovh {
-#     endpoint ovh-eu
-#     application_key {env.OVH_APP_KEY}
-#     application_secret {env.OVH_APP_SECRET}
-#     consumer_key {env.OVH_CONSUMER_KEY}
-#   }
-caddy_dns_block: "cloudflare {env.DNS_API_TOKEN}"
-# Noms des variables d'environnement à passer à Caddy (valeurs dans le vault)
-caddy_dns_env_keys:
-  - DNS_API_TOKEN
+# --- Certificat wildcard via DNS-01 (certbot, paquet Debian) ----------------
+# Plugin certbot : cloudflare, ovh, google, route53, desec, ...
+# Paquet installé : python3-certbot-dns-<plugin>
+certbot_dns_plugin: ovh
+certbot_dns_propagation_seconds: 120
 
-# --- Versions épinglées (à mettre à jour volontairement, cf. README) -------
-caddy_version: "2.10"
-crowdsec_version: "v1.6.8"
-authelia_version: "4.39"
-whoami_version: "v1.10"
-# Images complètes (Podman n'a pas de registre implicite : on qualifie tout)
+# --- CrowdSec (dépôt APT officiel, signé) -----------------------------------
+# Le dépôt n'a pas toujours publié de suite "trixie" : on utilise la suite
+# générique any/any de packagecloud. À repasser sur "trixie" quand elle existe.
+crowdsec_apt_uri: https://packagecloud.io/crowdsec/crowdsec/any/
+crowdsec_apt_suite: any
+crowdsec_collections:
+  - crowdsecurity/linux
+  - crowdsecurity/sshd
+  - crowdsecurity/haproxy
+  - crowdsecurity/http-cve
+  - crowdsecurity/base-http-scenarios
+
+# --- Applications (Podman rootless, publiées sur 127.0.0.1 uniquement) -----
+stack_user: stack
+# Images épinglées PAR EMPREINTE (cf. scripts/pin-digests.sh).
+# Format : registre/image:tag@sha256:<64 hex>. Le playbook refuse un tag seul.
+images_require_digest: true
 images:
-  caddy_builder: "docker.io/library/caddy:{{ caddy_version }}-builder"
-  caddy: "docker.io/library/caddy:{{ caddy_version }}"
-  crowdsec: "docker.io/crowdsecurity/crowdsec:{{ crowdsec_version }}"
-  authelia: "docker.io/authelia/authelia:{{ authelia_version }}"
-  whoami: "docker.io/traefik/whoami:{{ whoami_version }}"
+  whoami: "docker.io/traefik/whoami:v1.10"   # remplacer par la sortie de pin-digests.sh
 
-# --- Stack (Podman rootless) ------------------------------------------------
-stack_user: stack                       # utilisateur non privilégié qui porte les conteneurs
-stack_dir: /home/stack/stack            # configs montées dans les conteneurs
-# Sous-domaines : public = sans SSO, protected = derrière Authelia (2FA)
+# Sous-domaines publics : exposés sur 443 à tout Internet
 public_hosts:
   - name: www
-    upstream: app:8080
-protected_hosts:
+    image: whoami
+    port: 8081            # port local 127.0.0.1:<port>
+    container_port: 8080
+    args: "--port 8080 --name app-publique"
+
+# Sous-domaines privés : servis sur :8443, accessibles UNIQUEMENT depuis
+# admin_cidrs (double barrière : nftables + ACL HAProxy). Ex. : Nextcloud, supervision.
+private_hosts:
   - name: whoami
-    upstream: whoami:8080
+    image: whoami
+    port: 8082
+    container_port: 8080
+    args: "--port 8080 --name service-prive"

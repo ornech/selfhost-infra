@@ -1,9 +1,0 @@
-# {{ ansible_managed }}
-# Caddy compilé avec : DNS-01 ({{ caddy_dns_module }}) + bouncer CrowdSec
-FROM {{ images.caddy_builder }} AS builder
-RUN xcaddy build \
-    --with github.com/caddy-dns/{{ caddy_dns_module }} \
-    --with github.com/hslatman/caddy-crowdsec-bouncer/http
-
-FROM {{ images.caddy }}
-COPY --from=builder /usr/bin/caddy /usr/bin/caddy

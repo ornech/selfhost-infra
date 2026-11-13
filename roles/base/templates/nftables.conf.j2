@@ -1,13 +1,12 @@
 #!/usr/sbin/nft -f
 # {{ ansible_managed }}
 #
-# Pas de "flush ruleset" : on ne détruit pas les tables créées par netavark.
-# On (re)crée uniquement notre propre table.
+# Pas de "flush ruleset" : on ne détruit pas les tables de CrowdSec
+# (bouncer nftables) ni de netavark. On (re)crée uniquement notre table.
 #
-# Podman rootless : les ports publiés sont ouverts par pasta, un processus
-# de l'utilisateur "stack" qui écoute sur l'hôte. Le trafic passe donc par
-# cette chaîne INPUT (contrairement à Docker rootful et son DNAT/FORWARD) :
-# ce pare-feu protège réellement les ports exposés.
+# Seul HAProxy (sur l'hôte) écoute vers l'extérieur. Les applications Podman
+# n'écoutent que sur 127.0.0.1 : elles ne sont pas joignables depuis le réseau
+# même si une règle ci-dessous était trop permissive.
 
 table inet host_fw
 delete table inet host_fw
@@ -43,9 +42,12 @@ table inet host_fw {
     tcp dport 22 ip saddr @admin_v4 ct state new limit rate 10/minute accept
     tcp dport 22 ip6 saddr @admin_v6 ct state new limit rate 10/minute accept
 
-    # Seuls services exposés : Caddy (HTTP, HTTPS, HTTP/3)
+    # Frontal public HAProxy
     tcp dport { 80, 443 } accept
-    udp dport 443 accept
+
+    # Frontal privé HAProxy : administration uniquement
+    tcp dport 8443 ip saddr @admin_v4 accept
+    tcp dport 8443 ip6 saddr @admin_v6 accept
 
     # Journaliser le reste (limité) avant le drop
     limit rate 5/minute log prefix "nft-input-drop: " level info

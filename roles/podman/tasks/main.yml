@@ -6,9 +6,9 @@
   ansible.builtin.apt:
     name:
       - podman
-      - passt              # pasta : réseau rootless, conserve l'IP source (utile à CrowdSec)
+      - passt              # pasta : pile réseau rootless par défaut de Podman 5
       - netavark
-      - aardvark-dns       # résolution DNS entre conteneurs
+      - aardvark-dns
       - uidmap
       - fuse-overlayfs
       - dbus-user-session  # systemctl --user
@@ -32,10 +32,3 @@
   ansible.builtin.command: "loginctl enable-linger {{ stack_user }}"
   args:
     creates: "/var/lib/systemd/linger/{{ stack_user }}"
-
-- name: Ports < 1024 autorisés aux utilisateurs non privilégiés (80/443 en rootless)
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_unprivileged_port_start
-    value: "80"
-    sysctl_file: /etc/sysctl.d/80-rootless-ports.conf
-    reload: true

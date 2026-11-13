@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Application {{ 'publique' if item.kind == 'pub' else 'privée' }} {{ item.name }}.{{ domain }}
+
+[Container]
+ContainerName=app-{{ item.kind }}-{{ item.name }}
+Image={{ images[item.image] }}
+{% if item.args is defined %}
+Exec={{ item.args }}
+{% endif %}
+# Écoute sur la boucle locale UNIQUEMENT : seul HAProxy (hôte) y accède
+PublishPort=127.0.0.1:{{ item.port }}:{{ item.container_port }}
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+{% for s in item.secrets | default([]) %}
+Secret={{ s }}
+{% endfor %}
+{% for k, v in (item.env | default({})).items() %}
+Environment="{{ k }}={{ v }}"
+{% endfor %}
+{% for vol in item.volumes | default([]) %}
+Volume={{ vol }}
+{% endfor %}
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
