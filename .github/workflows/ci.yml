@@ -22,9 +22,19 @@ jobs:
             echo "::error file=$f::vault.yml est en clair ! ansible-vault encrypt $f"
             exit 1
           fi
-      - uses: gitleaks/gitleaks-action@v2
+      # Binaire officiel, version épinglée, somme de contrôle vérifiée.
+      # (L'action gitleaks-action échoue sur le premier push d'un dépôt.)
+      - name: gitleaks (historique complet)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.18.4"
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "$base/$archive"
+          curl -sSfLO "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " ${archive}\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "$archive" gitleaks
+          ./gitleaks detect --source . --redact --verbose
 
   lint:
     name: Lint Ansible
