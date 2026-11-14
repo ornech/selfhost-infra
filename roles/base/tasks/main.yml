@@ -1,4 +1,16 @@
 ---
+- name: Garde-fou - versions requises (Quadlet = Podman >= 4.4, deb822_repository = ansible-core >= 2.15)
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Debian'
+      - ansible_facts.distribution_major_version | int >= 13
+      - ansible_version.full is version('2.15', '>=')
+    fail_msg: >-
+      Cible : {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }},
+      ansible-core {{ ansible_version.full }}. Requis : Debian 13 (trixie) et ansible-core >= 2.15.
+      Debian 12 fournit Podman 4.3 (sans Quadlet) et ansible-core 2.14. Voir README, "Prérequis".
+    quiet: true
+
 - name: Garde-fou - aucune valeur d'exemple ne doit rester
   ansible.builtin.assert:
     that:

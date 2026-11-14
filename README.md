@@ -37,6 +37,25 @@ est expérimental et absent de Debian 13. Un proxy en conteneur rendrait donc
 CrowdSec aveugle. Sur l'hôte, HAProxy voit les vraies IP, s'isole lui-même
 (chroot + abandon des privilèges) et reçoit les correctifs de sécurité Debian.
 
+## Prérequis
+
+**Debian 13 (trixie)** sur la cible, et ansible-core ≥ 2.15. Debian 12 ne
+convient pas : Podman 4.3 (Quadlet n'apparaît qu'en 4.4), ansible-core 2.14
+(pas de `deb822_repository`), et sa maintenance de sécurité régulière est
+terminée (passage en LTS). Le playbook vérifie ces versions avant d'agir.
+
+Migration d'une Debian 12 en place :
+
+```bash
+sudo apt update && sudo apt full-upgrade
+sudo sed -i 's/bookworm/trixie/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null
+sudo apt update
+sudo apt upgrade --without-new-pkgs
+sudo apt full-upgrade
+sudo reboot
+cat /etc/debian_version     # 13.x attendu
+```
+
 ## Mise en route
 
 Exécuter les étapes **une par une** (pas tout le bloc d'un coup) : chacune doit
@@ -47,7 +66,8 @@ réussir avant la suivante.
 #    ansible.posix, community.general, containers.podman). Pas de pip.
 sudo apt install ansible skopeo python3-yaml git
 ansible --version
-ansible-galaxy collection list containers.podman ansible.posix community.general
+ansible-galaxy collection list containers.podman
+ansible-galaxy collection list ansible.posix
 
 # 2. Mot de passe du vault : aléatoire, jamais versionné (.gitignore)
 openssl rand -base64 32 > .vault_pass && chmod 600 .vault_pass
