@@ -219,6 +219,48 @@ public_hosts:            # ou private_hosts
 
 L'image doit exister pour l'architecture de la cible (`arm64` sur la VM Freebox).
 
+### Application avec base de données (pod)
+
+Une application qui déclare `sidecars:` devient un **pod** Podman : l'application
+et ses conteneurs annexes (ici la base) partagent un réseau interne, et **seul le
+port de l'application est publié**, sur `127.0.0.1`. La base n'est joignable de nulle
+part ailleurs. L'exemple complet (Ghost + MySQL 8) est l'entrée `club` de
+`public_hosts` dans `group_vars/all/main.yml`. Ghost n'est supporté qu'avec MySQL 8,
+pas MariaDB.
+
+**1. Secrets** : à ajouter dans le vault (`ansible-vault edit group_vars/all/vault.yml`).
+Mots de passe aléatoires : `openssl rand -base64 32`. Le mot de passe de la boîte
+d'envoi s'y saisit directement, sans passer par un terminal partagé.
+
+```yaml
+vault_app_secrets:
+  club_db_password: "..."
+  club_db_root_password: "..."
+  club_smtp_password: "..."          # mot de passe de noreply@ (SMTP)
+```
+
+**2. Images** : `ghost` et `mysql` sont déjà épinglées par empreinte dans `images:`.
+Pour les mettre à jour, changer le tag puis relancer `scripts/pin-digests.sh`.
+
+**3. Sauvegarde** : copier un volume MySQL « à chaud » donne un fichier inutilisable.
+On exporte donc la base avant chaque sauvegarde, et on exclut son volume :
+
+```yaml
+backup_pre_hooks:
+  - >-
+    cd / && runuser -u stack -- env XDG_RUNTIME_DIR=/run/user/$(id -u stack)
+    podman exec app-pub-club-db sh -c
+    'mysqldump --single-transaction -uroot -p"$(cat /run/secrets/club_db_root_password)" ghost'
+    > {{ backup_dump_dir }}/club.sql
+backup_excludes:
+  - "*.tmp"
+  - "*/volumes/club-db/*"
+```
+
+**À vérifier sur la VM avant la production** (le rendu des unités est testé, pas leur exécution) :
+`ReadOnly=true` avec les capacités accordées à MySQL, droits du volume `club-content`
+pour l'utilisateur `node` de Ghost, et une restauration réelle depuis `club.sql`.
+
 ## Exploitation
 
 ```bash

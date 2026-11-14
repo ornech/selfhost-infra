@@ -1,25 +1,42 @@
 # {{ ansible_managed }}
+# Variables du template : ctr (spécification du conteneur), ctr_name (nom
+# du conteneur et de l'unité), ctr_desc (description), ctr_pod (nom du pod, vide
+# si le conteneur est seul). Valeurs d'`env` : ni guillemet, ni %, ni $.
 [Unit]
-Description=Application {{ 'publique' if item.kind == 'pub' else 'privée' }} {{ item.name }}.{{ domain }}
+Description={{ ctr_desc }}
 
 [Container]
-ContainerName=app-{{ item.kind }}-{{ item.name }}
-Image={{ images[item.image] }}
-{% if item.args is defined %}
-Exec={{ item.args }}
+ContainerName={{ ctr_name }}
+Image={{ images[ctr.image] }}
+{% if ctr.args is defined %}
+Exec={{ ctr.args }}
 {% endif %}
+{% if ctr_pod %}
+# Les ports sont publiés par le pod (cf. app.pod.j2) ; les conteneurs du pod
+# se parlent sur 127.0.0.1 et aucun port annexe n'est joignable de l'hôte
+Pod={{ ctr_pod }}.pod
+{% else %}
 # Écoute sur la boucle locale UNIQUEMENT : seul HAProxy (hôte) y accède
-PublishPort=127.0.0.1:{{ item.port }}:{{ item.container_port }}
-ReadOnly=true
+PublishPort=127.0.0.1:{{ ctr.port }}:{{ ctr.container_port }}
+{% endif %}
+ReadOnly={{ ctr.read_only | default(true) | string | lower }}
 NoNewPrivileges=true
 DropCapability=all
-{% for s in item.secrets | default([]) %}
-Secret={{ s }}
+{% for cap in ctr.add_caps | default([]) %}
+AddCapability={{ cap }}
 {% endfor %}
-{% for k, v in (item.env | default({})).items() %}
+{# Secret : "nom" = fichier /run/secrets/nom ; {name, env} = variable d'environnement #}
+{% for s in ctr.secrets | default([]) %}
+{% if s is string %}
+Secret={{ s }}
+{% else %}
+Secret={{ s.name }},type=env,target={{ s.env }}
+{% endif %}
+{% endfor %}
+{% for k, v in (ctr.env | default({})).items() %}
 Environment="{{ k }}={{ v }}"
 {% endfor %}
-{% for vol in item.volumes | default([]) %}
+{% for vol in ctr.volumes | default([]) %}
 Volume={{ vol }}
 {% endfor %}
 

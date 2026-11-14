@@ -49,6 +49,8 @@ stack_uid: 1500
 images_require_digest: true
 images:
   whoami: "docker.io/traefik/whoami:v1.10"   # remplacer par la sortie de pin-digests.sh
+  ghost: "docker.io/library/ghost:6-alpine@sha256:a1c2adb3ab81b6d3fcae4d33bebe56a94a57c3e76c2f0b7b3d213726b2ca8922"
+  mysql: "docker.io/library/mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902"   # Ghost n'est supporté qu'avec MySQL 8
 
 # Sous-domaines publics : exposés sur 443 à tout Internet
 public_hosts:
@@ -57,6 +59,43 @@ public_hosts:
     port: 8081            # port local 127.0.0.1:<port>
     container_port: 8080
     args: "--port 8080 --name app-publique"
+
+  # Site du club : Ghost + MySQL 8 dans un pod (cf. README, « Application avec
+  # base de données »). Secrets : club_db_password, club_db_root_password,
+  # club_smtp_password, définis dans vault_app_secrets.
+  - name: club
+    image: ghost
+    port: 8083
+    container_port: 2368
+    volumes: ["club-content:/var/lib/ghost/content"]
+    secrets:
+      - { name: club_db_password, env: database__connection__password }
+      - { name: club_smtp_password, env: mail__options__auth__pass }
+    env:
+      url: "https://club.{{ domain }}"
+      NODE_ENV: production
+      server__host: "0.0.0.0"          # dans le pod ; seul le port publié sort sur 127.0.0.1
+      database__client: mysql
+      database__connection__host: 127.0.0.1
+      database__connection__user: ghost
+      database__connection__database: ghost
+      mail__transport: SMTP
+      mail__from: "noreply@{{ domain }}"
+      mail__options__host: smtp.mail.ovh.net
+      mail__options__port: "465"
+      mail__options__secure: "true"
+      mail__options__auth__user: "noreply@{{ domain }}"
+    sidecars:
+      - name: db
+        image: mysql
+        add_caps: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]   # l'entrypoint MySQL change d'utilisateur
+        secrets: [club_db_password, club_db_root_password]
+        env:
+          MYSQL_DATABASE: ghost
+          MYSQL_USER: ghost
+          MYSQL_PASSWORD_FILE: /run/secrets/club_db_password
+          MYSQL_ROOT_PASSWORD_FILE: /run/secrets/club_db_root_password
+        volumes: ["club-db:/var/lib/mysql"]
 
 # Sous-domaines privés : servis sur :8443, accessibles UNIQUEMENT depuis
 # admin_cidrs (double barrière : nftables + ACL HAProxy). Ex. : Nextcloud, supervision.

@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# Pod d'une application à plusieurs conteneurs (ex. : site + base de données).
+# Les conteneurs partagent un même réseau (127.0.0.1) ; seul le port de
+# l'application est publié, et seulement sur la boucle locale de l'hôte.
+[Pod]
+PodName=app-{{ item.kind }}-{{ item.name }}
+PublishPort=127.0.0.1:{{ item.port }}:{{ item.container_port }}

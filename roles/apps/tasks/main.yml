@@ -62,28 +62,71 @@
     - name: Images (par empreinte)
       containers.podman.podman_image:
         name: "{{ item }}"
-      loop: "{{ apps_units | map(attribute='image') | unique | map('extract', images) | list }}"
+      loop: "{{ apps_image_keys | map('extract', images) | list }}"
+
+    # Application à plusieurs conteneurs : un pod (réseau commun, un seul port
+    # publié) ; chaque conteneur y est rattaché par `Pod=` (cf. app.container.j2).
+    - name: Unités Quadlet des pods
+      ansible.builtin.template:
+        src: app.pod.j2
+        dest: "{{ apps_home }}/.config/containers/systemd/app-{{ item.kind }}-{{ item.name }}.pod"
+        mode: "0600"
+      loop: "{{ apps_units | selectattr('sidecars', 'defined') | list }}"
+      loop_control:
+        label: "app-{{ item.kind }}-{{ item.name }}"
+      register: apps_pods
 
     - name: Unités Quadlet
       ansible.builtin.template:
         src: app.container.j2
         dest: "{{ apps_home }}/.config/containers/systemd/app-{{ item.kind }}-{{ item.name }}.container"
         mode: "0600"
+      vars:
+        ctr: "{{ item }}"
+        ctr_name: "app-{{ item.kind }}-{{ item.name }}"
+        ctr_desc: "Application {{ 'publique' if item.kind == 'pub' else 'privée' }} {{ item.name }}.{{ domain }}"
+        ctr_pod: "{{ ('app-' ~ item.kind ~ '-' ~ item.name) if item.sidecars is defined else '' }}"
       loop: "{{ apps_units }}"
       loop_control:
         label: "app-{{ item.kind }}-{{ item.name }}"
       register: apps_quadlets
+
+    - name: Unités Quadlet des conteneurs annexes
+      ansible.builtin.template:
+        src: app.container.j2
+        dest: "{{ apps_home }}/.config/containers/systemd/app-{{ item.0.kind }}-{{ item.0.name }}-{{ item.1.name }}.container"
+        mode: "0600"
+      vars:
+        ctr: "{{ item.1 }}"
+        ctr_name: "app-{{ item.0.kind }}-{{ item.0.name }}-{{ item.1.name }}"
+        ctr_desc: "Conteneur annexe {{ item.1.name }} de {{ item.0.name }}.{{ domain }}"
+        ctr_pod: "app-{{ item.0.kind }}-{{ item.0.name }}"
+      loop: "{{ apps_sidecars }}"
+      loop_control:
+        label: "app-{{ item.0.kind }}-{{ item.0.name }}-{{ item.1.name }}"
+      register: apps_quadlets_sidecars
 
     - name: Générer les unités systemd à partir des fichiers Quadlet
       ansible.builtin.systemd_service:
         daemon_reload: true
         scope: user
 
+    # Annexes d'abord : la base doit répondre avant l'application. Si elle est
+    # encore en démarrage, l'application échoue puis Restart=always la relance.
+    - name: Démarrer / redémarrer les conteneurs annexes
+      ansible.builtin.systemd_service:
+        name: "app-{{ item.item.0.kind }}-{{ item.item.0.name }}-{{ item.item.1.name }}.service"
+        scope: user
+        state: "{{ 'restarted' if (item.changed or apps_pods.changed | default(false) or apps_secret_files.changed) else 'started' }}"
+      loop: "{{ apps_quadlets_sidecars.results }}"
+      loop_control:
+        label: "app-{{ item.item.0.kind }}-{{ item.item.0.name }}-{{ item.item.1.name }}"
+
     - name: Démarrer / redémarrer les applications
       ansible.builtin.systemd_service:
         name: "app-{{ item.item.kind }}-{{ item.item.name }}.service"
         scope: user
-        state: "{{ 'restarted' if (item.changed or apps_secret_files.changed) else 'started' }}"
+        state: "{{ 'restarted' if (item.changed or apps_pods.changed | default(false) or apps_secret_files.changed) else 'started' }}"
       loop: "{{ apps_quadlets.results }}"
       loop_control:
         label: "app-{{ item.item.kind }}-{{ item.item.name }}"
