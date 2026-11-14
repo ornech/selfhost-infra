@@ -1,7 +1,7 @@
 ---
 - name: Vérifier et recharger sshd
   ansible.builtin.command: /usr/sbin/sshd -t
-  changed_when: false
+  changed_when: true
   notify: Recharger sshd
 
 - name: Recharger sshd
