@@ -8,7 +8,6 @@
       - podman
       - passt              # pasta : pile réseau rootless par défaut de Podman 5
       - netavark
-      - aardvark-dns
       - uidmap
       - fuse-overlayfs
       - dbus-user-session  # systemctl --user

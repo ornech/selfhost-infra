@@ -38,8 +38,6 @@
       - apparmor-utils
       - sudo
       - ca-certificates
-      - curl
-      - gnupg
       - acl                # requis par Ansible pour become_user vers un compte non privilégié
       - python3-debian     # requis par deb822_repository (dépôt CrowdSec)
       - rsyslog            # fichiers /var/log/auth.log et /var/log/haproxy.log, lus par CrowdSec
