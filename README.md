@@ -158,6 +158,11 @@ git diff group_vars/all/main.yml
 ansible-playbook site.yml --check --diff -K
 ```
 
+Sur une machine vierge, le passage à blanc s'arrête à « Clés SSH de
+l'administrateur » (`Either user must exist…`) : le compte d'administration
+n'existe pas encore et `--check` ne le crée pas. C'est attendu ; les tâches qui
+précèdent (garde-fous, paquets, création du compte) ont bien été simulées.
+
 **8. Déploiement**
 
 ```bash
