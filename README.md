@@ -264,7 +264,6 @@ bascule vers l'utilisateur `node` : sans capacité, cette bascule échoue (`fail
 de passage que chaque conteneur est actif : un conteneur qui plante en boucle ne fait pas
 échouer `systemctl start`.
 
-**Reste à vérifier avant la production** : les droits du volume `club-content`, et une
 **Dépannage Ghost : `MigrationsAreLockedError`.** Si le pod ou la base est redémarré
 pendant que Ghost crée ses tables (premier démarrage), le verrou de migration reste posé
 et Ghost refuse de démarrer. Tant que le site est vide, recréer la base suffit ; **jamais
@@ -275,6 +274,7 @@ une fois qu'il contient du contenu** (restaurer alors `club.sql`, ou lever le ve
 (cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user restart app-pub-club.service)
 ```
 
+**Reste à vérifier avant la production** : les droits du volume `club-content`, et une
 restauration réelle depuis `club.sql`.
 
 ## Exploitation
