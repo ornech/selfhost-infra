@@ -58,34 +58,102 @@ cat /etc/debian_version     # 13.x attendu
 
 ## Mise en route
 
-Aucun éditeur à ouvrir : chaque commande se colle seule.
+Chaque bloc se colle **seul**, dans l'ordre. Aucun éditeur, aucun script :
+chaque ligne dit ce qu'elle modifie, et une commande de contrôle suit.
+
+**0. Outils et dépôt**
 
 ```bash
-cd ~/selfhost-infra
-sudo apt install ansible skopeo python3-yaml git openssl
+sudo apt install ansible skopeo git openssl
+cd ~/selfhost-infra && git pull
+```
+
+**1. Mot de passe du vault** (aléatoire, ignoré par Git, à sauvegarder hors du serveur)
+
+```bash
+openssl rand -base64 32 > .vault_pass
+chmod 600 .vault_pass
+```
+
+**2. Tes valeurs** (adapter avant de coller)
+
+```bash
+DOMAINE=mondomaine.fr
+EMAIL=moi@mondomaine.fr
+ADMIN=jf
+```
+
+**3. Report dans `group_vars/all/main.yml`**
+
+```bash
+sed -i "s|^domain: .*|domain: $DOMAINE|" group_vars/all/main.yml
+sed -i "s|^acme_email: .*|acme_email: $EMAIL|" group_vars/all/main.yml
+sed -i "s|^admin_user: .*|admin_user: $ADMIN|" group_vars/all/main.yml
+CLE=$(grep -m1 '^ssh-' ~/.ssh/authorized_keys)
+sed -i "s|^  - \"ssh-ed25519 AAAA...remplace-moi jf@poste\"|  - \"$CLE\"|" group_vars/all/main.yml
+grep -nE '^(domain|acme_email|admin_user):|^  - "ssh' group_vars/all/main.yml
+```
+
+**4. Identifiants OVH** : saisis sans affichage et sans trace dans l'historique.
+Coller **une ligne à la fois** (chaque ligne attend ta saisie).
+
+```bash
+read -rp "application_key : " OVH_AK
 ```
 
 ```bash
-scripts/init.sh
+read -rsp "application_secret : " OVH_AS; echo
 ```
-
-Le script pose les questions (domaine, e-mail, compte admin, fichier de clé
-SSH, plugin DNS et ses identifiants en saisie masquée), puis :
-génère `.vault_pass` (aléatoire), renseigne `group_vars/all/main.yml`, crée et
-chiffre `group_vars/all/vault.yml`, épingle les images par empreinte.
-Il peut être relancé : un vault déjà chiffré n'est pas écrasé.
 
 ```bash
-git diff group_vars/all/main.yml               # relire ce qui a changé
-ansible-playbook site.yml --check --diff -K    # à blanc
+read -rsp "consumer_key : " OVH_CK; echo
 ```
+
+**5. Création et chiffrement du vault**
+
+```bash
+cat > group_vars/all/vault.yml <<FIN
+---
+vault_certbot_dns_credentials: |
+  dns_ovh_endpoint = ovh-eu
+  dns_ovh_application_key = $OVH_AK
+  dns_ovh_application_secret = $OVH_AS
+  dns_ovh_consumer_key = $OVH_CK
+vault_app_secrets: {}
+FIN
+chmod 600 group_vars/all/vault.yml
+ansible-vault encrypt group_vars/all/vault.yml
+unset OVH_AK OVH_AS OVH_CK
+head -1 group_vars/all/vault.yml
+```
+
+La dernière ligne doit afficher `$ANSIBLE_VAULT;1.1;AES256`.
+
+**6. Épinglage de l'image par empreinte**
+
+```bash
+skopeo inspect --raw docker://docker.io/traefik/whoami:v1.10 > /tmp/manifeste.json
+test -s /tmp/manifeste.json && echo "manifeste OK" || echo "ÉCHEC : ne pas continuer"
+DIGEST=sha256:$(sha256sum /tmp/manifeste.json | cut -d' ' -f1)
+sed -i "s|^  whoami: \"docker.io/traefik/whoami:v1.10\"|  whoami: \"docker.io/traefik/whoami:v1.10@$DIGEST\"|" group_vars/all/main.yml
+grep -n '  whoami:' group_vars/all/main.yml
+```
+
+L'empreinte est celle du manifeste multi-architecture téléchargé : c'est
+exactement ce que Podman vérifiera au moment du pull.
+
+**7. Relecture puis passage à blanc**
+
+```bash
+git diff group_vars/all/main.yml
+ansible-playbook site.yml --check --diff -K
+```
+
+**8. Déploiement**
 
 ```bash
 ansible-playbook site.yml -K
 ```
-
-Modifier un secret plus tard : `ansible-vault edit group_vars/all/vault.yml`
-(ouvre l'éditeur défini par `$EDITOR`, à lancer seule).
 
 ### Avant le premier passage : ne pas se couper l'accès
 
