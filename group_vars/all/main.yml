@@ -106,3 +106,7 @@ private_hosts:
     port: 8082
     container_port: 8080
     args: "--port 8080 --name service-prive"
+
+# Limitation de débit HAProxy : requêtes max par IP sur 10 s. L'interface
+# d'administration de Ghost charge une centaine de fichiers d'un coup.
+haproxy_rate_limit: 300

@@ -123,25 +123,36 @@
         label: "app-{{ item.item.kind }}-{{ item.item.name }}-pod"
       when: item.changed  # noqa: no-handler
 
+    # (Le pod redémarré relance lui-même ses conteneurs : systemd propage le
+    # redémarrage aux unités qui en dépendent. Les redemander ici ferait
+    # annuler l'un des deux jobs.)
     # Annexes d'abord : la base doit répondre avant l'application. Si elle est
     # encore en démarrage, l'application échoue puis Restart=always la relance.
     - name: Démarrer / redémarrer les conteneurs annexes
       ansible.builtin.systemd_service:
         name: "app-{{ item.item.0.kind }}-{{ item.item.0.name }}-{{ item.item.1.name }}.service"
         scope: user
-        state: "{{ 'restarted' if (item.changed or apps_pods.changed | default(false) or apps_secret_files.changed) else 'started' }}"
+        state: "{{ 'restarted' if (item.changed or apps_secret_files.changed) else 'started' }}"
       loop: "{{ apps_quadlets_sidecars.results }}"
       loop_control:
         label: "app-{{ item.item.0.kind }}-{{ item.item.0.name }}-{{ item.item.1.name }}"
+      register: apps_sidecars_started
+      until: apps_sidecars_started is succeeded
+      retries: 3
+      delay: 5
 
     - name: Démarrer / redémarrer les applications
       ansible.builtin.systemd_service:
         name: "app-{{ item.item.kind }}-{{ item.item.name }}.service"
         scope: user
-        state: "{{ 'restarted' if (item.changed or apps_pods.changed | default(false) or apps_secret_files.changed) else 'started' }}"
+        state: "{{ 'restarted' if (item.changed or apps_secret_files.changed) else 'started' }}"
       loop: "{{ apps_quadlets.results }}"
       loop_control:
         label: "app-{{ item.item.kind }}-{{ item.item.name }}"
+      register: apps_started
+      until: apps_started is succeeded
+      retries: 3
+      delay: 5
 
     # Un conteneur qui plante en boucle ne fait PAS échouer « systemctl start » :
     # il démarre, puis meurt. On laisse systemd atteindre sa limite de
@@ -152,6 +163,7 @@
       when: >-
         apps_quadlets.changed or apps_quadlets_sidecars.changed
         or apps_pods.changed | default(false) or apps_secret_files.changed
+        or apps_started.changed or apps_sidecars_started.changed
 
     - name: Les applications sont actives
       ansible.builtin.command:

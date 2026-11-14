@@ -265,6 +265,16 @@ de passage que chaque conteneur est actif : un conteneur qui plante en boucle ne
 échouer `systemctl start`.
 
 **Reste à vérifier avant la production** : les droits du volume `club-content`, et une
+**Dépannage Ghost : `MigrationsAreLockedError`.** Si le pod ou la base est redémarré
+pendant que Ghost crée ses tables (premier démarrage), le verrou de migration reste posé
+et Ghost refuse de démarrer. Tant que le site est vide, recréer la base suffit ; **jamais
+une fois qu'il contient du contenu** (restaurer alors `club.sql`, ou lever le verrou) :
+
+```bash
+(cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) podman exec app-pub-club-db sh -c 'mysql -uroot -p"$(cat /run/secrets/club_db_root_password)" -e "DROP DATABASE ghost; CREATE DATABASE ghost;"')
+(cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user restart app-pub-club.service)
+```
+
 restauration réelle depuis `club.sql`.
 
 ## Exploitation
