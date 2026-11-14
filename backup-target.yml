@@ -1,0 +1,15 @@
+---
+# Machine qui REÇOIT les sauvegardes (hors site). À lancer séparément :
+#   ansible-playbook backup-target.yml -K
+- name: Cible de sauvegarde restic en mode ajout seul
+  hosts: backup_targets
+  become: true
+  vars:
+    host_fw_web: false            # pas de HAProxy ici : 80/443 restent fermés
+  roles:
+    - role: base
+      tags: [base]
+    - role: storage
+      tags: [storage]
+    - role: backup_target
+      tags: [backup_target]

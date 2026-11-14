@@ -41,6 +41,7 @@ crowdsec_collections:
 
 # --- Applications (Podman rootless, publiées sur 127.0.0.1 uniquement) -----
 stack_user: stack
+stack_uid: 1500
 # Images épinglées PAR EMPREINTE (cf. scripts/pin-digests.sh).
 # Format : registre/image:tag@sha256:<64 hex>. Le playbook refuse un tag seul.
 images_require_digest: true

@@ -1,0 +1,89 @@
+---
+# rest-server en mode AJOUT SEUL : le serveur sauvegardé peut écrire de
+# nouvelles sauvegardes, jamais supprimer ni modifier les anciennes. Un
+# attaquant qui prend le serveur ne peut donc pas détruire l'historique.
+- name: Paquets rest-server, restic et htpasswd (Debian)
+  ansible.builtin.apt:
+    name:
+      - restic-rest-server
+      - restic            # pour l'élagage, lancé à la main (voir README)
+      - apache2-utils     # htpasswd
+    state: present
+
+- name: Binaire rest-server présent
+  ansible.builtin.stat:
+    path: "{{ backup_target_bin }}"
+  register: backup_target_binary
+  failed_when: not backup_target_binary.stat.exists
+
+- name: Unités fournies par le paquet, s'il y en a (remplacées par la nôtre)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: [rest-server.service, restic-rest-server.service]
+  failed_when: false
+
+- name: Utilisateur système dédié
+  ansible.builtin.user:
+    name: restic
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ backup_target_data_dir }}"
+    create_home: false
+
+- name: Répertoire des dépôts
+  ansible.builtin.file:
+    path: "{{ backup_target_data_dir }}"
+    state: directory
+    owner: restic
+    group: restic
+    mode: "0700"
+
+- name: Fichier de comptes existant ?
+  ansible.builtin.stat:
+    path: "{{ backup_target_data_dir }}/.htpasswd"
+  register: backup_target_htfile
+
+- name: Compte du serveur sauvegardé déjà à jour ?
+  ansible.builtin.command:
+    argv: [htpasswd, -v, -i, "{{ backup_target_data_dir }}/.htpasswd", "{{ vault_backup_rest_user }}"]
+    stdin: "{{ vault_backup_rest_password }}"
+  register: backup_target_htpasswd
+  when: backup_target_htfile.stat.exists
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Créer ou mettre à jour le compte (bcrypt)
+  ansible.builtin.command:
+    argv: >-
+      {{ ['htpasswd', '-i', '-B', '-C', '12']
+         + ([] if backup_target_htfile.stat.exists else ['-c'])
+         + [backup_target_data_dir ~ '/.htpasswd', vault_backup_rest_user] }}
+    stdin: "{{ vault_backup_rest_password }}"
+  when: not backup_target_htfile.stat.exists or backup_target_htpasswd.rc != 0
+  changed_when: true
+  no_log: true
+  notify: Redémarrer rest-server
+
+- name: Droits du fichier de comptes
+  ansible.builtin.file:
+    path: "{{ backup_target_data_dir }}/.htpasswd"
+    owner: restic
+    group: restic
+    mode: "0600"
+
+- name: Unité systemd
+  ansible.builtin.template:
+    src: selfhost-rest-server.service.j2
+    dest: /etc/systemd/system/selfhost-rest-server.service
+    mode: "0644"
+  notify: Redémarrer rest-server
+
+- name: Service rest-server
+  ansible.builtin.systemd_service:
+    name: selfhost-rest-server
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,20 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Vérifie la structure de chaque dépôt et RELIT une partie des données
+# ({{ backup_check_subset }}) pour détecter une corruption silencieuse.
+set -u
+export RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password
+
+status=0
+for repo in /etc/selfhost-backup/repos/*; do
+  name=$(basename "$repo")
+  echo "== Vérification de $name"
+  if RESTIC_REPOSITORY_FILE="$repo" restic check --read-data-subset={{ backup_check_subset }}; then
+    echo "-> $name : intègre"
+  else
+    echo "-> $name : PROBLÈME" >&2
+    status=1
+  fi
+  RESTIC_REPOSITORY_FILE="$repo" restic snapshots --latest 1 --compact || status=1
+done
+exit "$status"

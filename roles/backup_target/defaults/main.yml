@@ -1,0 +1,9 @@
+---
+# Machine qui REÇOIT les sauvegardes (chez un proche, ou un second serveur).
+# Accessible idéalement à travers un tunnel WireGuard entre les deux sites.
+backup_target_data_dir: /srv/restic
+backup_target_port: 8000
+backup_target_listen: "0.0.0.0:{{ backup_target_port }}"
+# Seules ces adresses peuvent joindre rest-server (nftables)
+backup_target_client_cidrs: []
+backup_target_bin: /usr/bin/rest-server

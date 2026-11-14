@@ -5,9 +5,13 @@
   roles:
     - role: base       # SSH, nftables, mises à jour, sysctl, journaux
       tags: [base]
+    - role: storage    # surveillance RAID et SMART (ne touche jamais aux disques)
+      tags: [storage]
     - role: edge       # certbot (DNS-01), HAProxy, CrowdSec + bouncer nftables
       tags: [edge]
     - role: podman     # Podman rootless, utilisateur dédié
       tags: [podman]
     - role: apps       # applications en unités Quadlet, sur 127.0.0.1
       tags: [apps]
+    - role: backup     # restic : sauvegarde quotidienne, vérification hebdomadaire
+      tags: [backup]

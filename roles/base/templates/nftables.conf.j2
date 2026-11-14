@@ -42,12 +42,18 @@ table inet host_fw {
     tcp dport 22 ip saddr @admin_v4 ct state new limit rate 10/minute accept
     tcp dport 22 ip6 saddr @admin_v6 ct state new limit rate 10/minute accept
 
+{% if host_fw_web | default(true) %}
     # Frontal public HAProxy
     tcp dport { 80, 443 } accept
 
     # Frontal privé HAProxy : administration uniquement
     tcp dport 8443 ip saddr @admin_v4 accept
     tcp dport 8443 ip6 saddr @admin_v6 accept
+{% endif %}
+{% if backup_target_client_cidrs | default([]) | length > 0 %}
+    # rest-server (cible de sauvegarde) : uniquement les serveurs sauvegardés
+    tcp dport {{ backup_target_port | default(8000) }} ip saddr { {{ backup_target_client_cidrs | join(', ') }} } accept
+{% endif %}
 
     # Journaliser le reste (limité) avant le drop
     limit rate 5/minute log prefix "nft-input-drop: " level info

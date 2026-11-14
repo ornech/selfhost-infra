@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Vérification d'intégrité des sauvegardes (selfhost)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/selfhost-backup-check
+Nice=10
+IOSchedulingClass=idle
+ProtectSystem=strict
+ReadWritePaths=/root/.cache/restic
+PrivateTmp=true
+NoNewPrivileges=true

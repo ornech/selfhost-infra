@@ -1,0 +1,5 @@
+---
+- name: Redémarrer smartd
+  ansible.builtin.systemd_service:
+    name: smartd
+    state: restarted

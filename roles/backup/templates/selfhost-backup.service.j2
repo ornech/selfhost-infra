@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Sauvegarde restic des données (selfhost)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/selfhost-backup
+Nice=10
+IOSchedulingClass=idle
+# Pas de ProtectSystem=strict ici : les exports (backup_pre_hooks) lancent
+# podman exec, qui doit écrire dans l'espace de l'utilisateur stack.
+NoNewPrivileges=true

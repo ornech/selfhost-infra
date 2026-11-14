@@ -28,6 +28,9 @@ Internet ──► Freebox (redirection 80/443) ──► hôte Debian 13
 | `edge` | HAProxy, certbot + plugin DNS, CrowdSec + bouncer nftables |
 | `podman` | Podman 5, utilisateur `stack` sans shell, linger systemd |
 | `apps` | contrôle des empreintes d'images, secrets Podman, unités Quadlet |
+| `storage` | surveillance RAID (mdadm) et SMART ; arrêt si miroir dégradé |
+| `backup` | restic : exports, sauvegarde quotidienne multi-dépôts, vérification hebdomadaire |
+| `backup_target` | (machine distante, `backup-target.yml`) rest-server en mode ajout seul |
 
 ### Pourquoi HAProxy et CrowdSec sur l'hôte, et pas en conteneur
 
@@ -234,6 +237,201 @@ curl -skI https://inconnu.example.fr # connexion coupée sans réponse
 **Non vérifié** (accès réseau indisponible pendant la rédaction) : installation
 réelle des paquets sur Debian 13, émission du certificat, dépôt CrowdSec
 `any/any`. Le premier passage sur la VM fait office de recette.
+
+## Sauvegardes
+
+Deux risques distincts, deux réponses distinctes :
+
+- **Panne de disque** : RAID 1 (deux disques en miroir) et surveillance SMART,
+  voir la section Stockage. Le miroir **n'est pas** une sauvegarde : une
+  suppression, une corruption ou un rançongiciel sont recopiés sur les deux disques.
+- **Perte de données** : sauvegardes restic, chiffrées et dédupliquées,
+  selon la règle 3-2-1 (trois copies, deux supports, une hors site).
+
+Le système n'est pas sauvegardé : le playbook le reconstruit. Seules les
+**données** le sont : volumes Podman, certificats, exports de bases.
+
+### Principe de la copie hors site : ajout seul
+
+La machine qui reçoit les sauvegardes fait tourner rest-server en mode
+`--append-only`. Le serveur sauvegardé peut **ajouter** des sauvegardes, jamais
+en supprimer ni en modifier. Un attaquant qui prendrait le serveur ne pourrait
+donc pas détruire l'historique. Conséquence : l'élagage des anciennes
+sauvegardes se fait **à la main, depuis la machine cible**.
+
+### Mise en place
+
+**1. Secrets** : ajouter au vault (à coller seul, ouvre l'éditeur).
+
+```bash
+ansible-vault edit group_vars/all/vault.yml
+```
+
+Lignes à ajouter (générer les deux mots de passe avec `openssl rand -base64 32`) :
+
+```yaml
+vault_restic_password: "..."          # clé de chiffrement : la conserver AUSSI hors du serveur
+vault_backup_rest_user: "selfhost"
+vault_backup_rest_password: "..."
+```
+
+Sans `vault_restic_password`, **aucune restauration n'est possible**. Le garder
+dans un gestionnaire de mots de passe ou sur papier, ailleurs que sur le serveur.
+
+**2. Machine cible** (chez un proche, ou second serveur), joignable par le tunnel
+WireGuard : la déclarer dans `inventory/hosts.yml`, groupe `backup_targets`, puis :
+
+```bash
+ansible-playbook backup-target.yml -K
+```
+
+**3. Dépôts** : dans `group_vars/all/main.yml`, renseigner `backup_repositories`
+(exemple commenté dans `roles/backup/defaults/main.yml`), puis :
+
+```bash
+ansible-playbook site.yml -K --tags backup
+```
+
+### Contrôles
+
+```bash
+systemctl list-timers 'selfhost-backup*'
+sudo journalctl -u selfhost-backup -n 30
+sudo journalctl -u selfhost-backup-check -n 30
+```
+
+Lancer une sauvegarde immédiatement :
+
+```bash
+sudo systemctl start selfhost-backup
+```
+
+### Restaurer un fichier ou un dossier
+
+Lister les sauvegardes du dépôt distant :
+
+```bash
+sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic snapshots
+```
+
+Restaurer la dernière sauvegarde dans un dossier à part, sans rien écraser :
+
+```bash
+sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic restore latest --target /root/restauration
+sudo ls -R /root/restauration | head -50
+```
+
+### Test de restauration mensuel
+
+Une sauvegarde jamais restaurée n'est qu'un espoir. Une fois par mois :
+
+```bash
+sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic restore latest --target /root/test-restauration
+sudo du -sh /root/test-restauration
+sudo rm -rf /root/test-restauration
+```
+
+### Reconstruction complète sur une nouvelle machine
+
+1. Installer Debian 13 (RAID 1 au partitionnement si deux disques).
+2. Cloner ce dépôt, restaurer `.vault_pass`, puis `ansible-playbook site.yml -K`.
+3. Arrêter les applications :
+
+```bash
+sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 systemctl --user stop 'app-*'
+```
+
+4. Restaurer les volumes à leur place :
+
+```bash
+sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic restore latest --target / --include /home/stack/.local/share/containers/storage/volumes
+```
+
+5. Redémarrer les applications :
+
+```bash
+sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 systemctl --user start 'app-*'
+```
+
+L'utilisateur `stack` a un identifiant fixe (1500) : les fichiers restaurés
+retrouvent leurs propriétaires. Les sous-identifiants des conteneurs
+(`/etc/subuid`) dépendent de l'ordre de création des comptes ; si une
+application ne lit plus ses fichiers, remettre les droits depuis le conteneur :
+
+```bash
+sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 podman unshare chown -R 0:0 /home/stack/.local/share/containers/storage/volumes/<volume>/_data
+```
+
+### Élagage (sur la machine cible, à la main)
+
+Le mot de passe de chiffrement est demandé : il n'est jamais stocké sur la cible.
+
+```bash
+sudo -u restic restic -r /srv/restic/selfhost forget --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune
+```
+
+## Stockage
+
+### RAID 1 : à la création, pas après
+
+Le miroir se crée **à l'installation de Debian**, dans le partitionneur
+(« RAID logiciel »). Le playbook ne touche jamais aux disques : il surveille,
+et **s'arrête en erreur** s'il détecte un miroir dégradé.
+
+```bash
+cat /proc/mdstat                 # [UU] = sain, [U_] = un disque manquant
+sudo mdadm --detail /dev/md0
+```
+
+### SMART
+
+Sur une machine physique, smartd surveille chaque disque, lance un test court
+chaque nuit et un test long le samedi. Les alertes vont au compte root, donc
+dans le journal système ; un envoi par e-mail demande d'installer un relais de
+messagerie (par exemple msmtp).
+
+```bash
+sudo smartctl -H /dev/sda        # verdict de santé
+sudo smartctl -A /dev/sda        # attributs (secteurs réalloués, en attente...)
+sudo journalctl -u smartd -n 30
+```
+
+### Remplacer un disque du miroir
+
+Exemple : `sdb` est en panne, `sda` est sain, le miroir est `md0`.
+Vérifier les noms avec `cat /proc/mdstat` **avant** chaque commande.
+
+Retirer le disque défaillant du miroir :
+
+```bash
+sudo mdadm --manage /dev/md0 --fail /dev/sdb1
+sudo mdadm --manage /dev/md0 --remove /dev/sdb1
+```
+
+Éteindre, remplacer physiquement le disque, redémarrer. Puis recopier la table
+de partitions du disque sain vers le neuf, et donner au neuf ses propres
+identifiants :
+
+```bash
+sudo sfdisk -d /dev/sda | sudo sfdisk /dev/sdb
+sudo sgdisk -G /dev/sdb
+```
+
+Réintégrer le disque et suivre la reconstruction :
+
+```bash
+sudo mdadm --manage /dev/md0 --add /dev/sdb1
+cat /proc/mdstat
+```
+
+Rendre le nouveau disque amorçable (démarrage BIOS) :
+
+```bash
+sudo grub-install /dev/sdb
+```
+
+En démarrage UEFI, la partition EFI n'est pas dans le miroir : la recopier
+depuis le disque sain.
 
 ## Passage en production
 

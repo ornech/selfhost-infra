@@ -1,0 +1,33 @@
+---
+# Dépôts restic de destination. Vide = sauvegarde non configurée (le rôle
+# installe restic et s'arrête). Règle 3-2-1 : au moins un dépôt HORS SITE.
+#   - name: distant        # rest-server en mode ajout seul (rôle backup_target)
+#     url: "rest:http://{{ vault_backup_rest_user }}:{{ vault_backup_rest_password }}@10.8.0.2:8000/{{ vault_backup_rest_user }}/"
+#   - name: local          # second disque monté sur le serveur
+#     url: /srv/backup/restic
+backup_repositories: []
+
+# Ce qui est sauvegardé. Le système lui-même ne l'est pas : le playbook le
+# reconstruit. Seules les DONNÉES comptent.
+backup_paths:
+  - "/home/{{ stack_user }}/.local/share/containers/storage/volumes"   # volumes Podman
+  - /etc/letsencrypt                                                    # évite une réémission
+  - "{{ backup_dump_dir }}"                                              # exports de bases
+
+backup_excludes:
+  - "*.tmp"
+
+# Exports cohérents AVANT la sauvegarde (une base copiée « à chaud » peut être
+# inutilisable). Chaque commande est lancée en root ; elle écrit dans backup_dump_dir.
+# Exemple PostgreSQL dans un conteneur de l'utilisateur stack :
+#   - "runuser -u stack -- env XDG_RUNTIME_DIR=/run/user/$(id -u stack)
+#      podman exec app-pub-app pg_dump -U app app > {{ backup_dump_dir }}/app.sql"
+backup_pre_hooks: []
+
+backup_dump_dir: /var/backups/selfhost
+
+# Planification (format systemd OnCalendar)
+backup_schedule: "*-*-* 03:15:00"
+backup_check_schedule: "Sun *-*-* 05:00:00"
+# Part des données relue et vérifiée chaque semaine (détecte la corruption)
+backup_check_subset: "5%"

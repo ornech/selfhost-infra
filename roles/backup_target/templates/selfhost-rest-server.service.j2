@@ -1,0 +1,29 @@
+# {{ ansible_managed }}
+[Unit]
+Description=rest-server restic en mode ajout seul (selfhost)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=restic
+Group=restic
+# --append-only  : création permise, suppression et modification refusées
+# --private-repos : chaque compte n'accède qu'à son propre dépôt /<compte>/
+ExecStart={{ backup_target_bin }} \
+    --path {{ backup_target_data_dir }} \
+    --listen {{ backup_target_listen }} \
+    --htpasswd-file {{ backup_target_data_dir }}/.htpasswd \
+    --append-only \
+    --private-repos
+Restart=on-failure
+
+ProtectSystem=strict
+ReadWritePaths={{ backup_target_data_dir }}
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

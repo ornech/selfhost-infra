@@ -1,0 +1,114 @@
+---
+- name: Restic (paquet Debian)
+  ansible.builtin.apt:
+    name: restic
+    state: present
+
+- name: Sauvegarde non configurée
+  ansible.builtin.debug:
+    msg: >-
+      backup_repositories est vide : aucune sauvegarde n'est planifiée.
+      Voir README, section Sauvegardes.
+  when: backup_repositories | length == 0
+
+- name: Configuration de la sauvegarde
+  when: backup_repositories | length > 0
+  block:
+    - name: Répertoires
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /etc/selfhost-backup, mode: "0700" }
+        - { path: /etc/selfhost-backup/repos, mode: "0700" }
+        - { path: "{{ backup_dump_dir }}", mode: "0700" }
+        - { path: /root/.cache/restic, mode: "0700" }
+
+    - name: Mot de passe de chiffrement des dépôts
+      ansible.builtin.copy:
+        content: "{{ vault_restic_password }}"
+        dest: /etc/selfhost-backup/password
+        mode: "0600"
+      no_log: true
+
+    # Un fichier par dépôt : l'URL peut contenir des identifiants.
+    - name: Adresse de chaque dépôt
+      ansible.builtin.copy:
+        content: "{{ item.url }}\n"
+        dest: "/etc/selfhost-backup/repos/{{ item.name }}"
+        mode: "0600"
+      loop: "{{ backup_repositories }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Liste des exclusions
+      ansible.builtin.copy:
+        content: "{{ backup_excludes | join('\n') }}\n"
+        dest: /etc/selfhost-backup/excludes
+        mode: "0600"
+
+    - name: Script de sauvegarde
+      ansible.builtin.template:
+        src: selfhost-backup.j2
+        dest: /usr/local/sbin/selfhost-backup
+        mode: "0700"
+
+    - name: Script de vérification
+      ansible.builtin.template:
+        src: selfhost-backup-check.j2
+        dest: /usr/local/sbin/selfhost-backup-check
+        mode: "0700"
+
+    - name: Dépôt déjà initialisé ?
+      ansible.builtin.command:
+        argv: [restic, cat, config]
+      environment:
+        RESTIC_REPOSITORY_FILE: "/etc/selfhost-backup/repos/{{ item.name }}"
+        RESTIC_PASSWORD_FILE: /etc/selfhost-backup/password
+      loop: "{{ backup_repositories }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: backup_repo_state
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Initialiser les dépôts absents
+      ansible.builtin.command:
+        argv: [restic, init]
+      environment:
+        RESTIC_REPOSITORY_FILE: "/etc/selfhost-backup/repos/{{ item.item.name }}"
+        RESTIC_PASSWORD_FILE: /etc/selfhost-backup/password
+      loop: "{{ backup_repo_state.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.rc != 0
+      changed_when: true
+
+    - name: Unités systemd (service + minuterie)
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - selfhost-backup.service
+        - selfhost-backup.timer
+        - selfhost-backup-check.service
+        - selfhost-backup-check.timer
+      notify: Recharger systemd
+
+    - name: Appliquer les unités
+      ansible.builtin.meta: flush_handlers
+
+    - name: Minuteries actives
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - selfhost-backup.timer
+        - selfhost-backup-check.timer

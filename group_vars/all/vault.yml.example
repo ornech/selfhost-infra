@@ -18,3 +18,11 @@ vault_certbot_dns_credentials: |
 # Utilisés dans les unités Quadlet via Secret=<nom>.
 vault_app_secrets: {}
 #   app_db_password: "changeme"
+
+# --- Sauvegardes (restic) ---------------------------------------------------
+# Clé de chiffrement des dépôts : SANS ELLE, AUCUNE RESTAURATION POSSIBLE.
+# La conserver aussi HORS du serveur (gestionnaire de mots de passe, papier).
+vault_restic_password: "changeme"
+# Compte du serveur sauvegardé sur rest-server (cible hors site)
+vault_backup_rest_user: "selfhost"
+vault_backup_rest_password: "changeme"

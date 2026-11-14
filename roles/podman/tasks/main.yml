@@ -17,6 +17,7 @@
 - name: Utilisateur dédié à la stack (sans mot de passe ni shell)
   ansible.builtin.user:
     name: "{{ stack_user }}"
+    uid: "{{ stack_uid }}"     # fixe : une restauration sur une autre machine retrouve les mêmes propriétaires
     shell: /usr/sbin/nologin
     password: "!"
     create_home: true

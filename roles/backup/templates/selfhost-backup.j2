@@ -1,0 +1,35 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# 1. exports cohérents des bases  2. sauvegarde vers chaque dépôt
+# Un dépôt en échec n'empêche pas les autres ; le code de retour le signale.
+set -u
+export RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password
+
+echo "== Exports avant sauvegarde"
+{% for hook in backup_pre_hooks %}
+echo "-> hook {{ loop.index }}"
+{{ hook }} || { echo "ÉCHEC du hook {{ loop.index }} : sauvegarde annulée" >&2; exit 1; }
+{% endfor %}
+
+# Chemins existants seulement (ex. : pas encore de volume Podman au départ)
+set --
+{% for p in backup_paths %}
+if [ -e "{{ p }}" ]; then set -- "$@" "{{ p }}"; else echo "absent, ignoré : {{ p }}"; fi
+{% endfor %}
+[ "$#" -gt 0 ] || { echo "Aucun chemin à sauvegarder." >&2; exit 1; }
+
+status=0
+for repo in /etc/selfhost-backup/repos/*; do
+  name=$(basename "$repo")
+  echo "== Sauvegarde vers $name"
+  if RESTIC_REPOSITORY_FILE="$repo" restic backup \
+       --tag auto --one-file-system \
+       --exclude-file /etc/selfhost-backup/excludes \
+       "$@"; then
+    echo "-> $name : OK"
+  else
+    echo "-> $name : ÉCHEC" >&2
+    status=1
+  fi
+done
+exit "$status"

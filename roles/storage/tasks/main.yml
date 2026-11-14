@@ -1,0 +1,61 @@
+---
+# Santé des disques. Le RAID 1 se crée à l'INSTALLATION de Debian (partitionneur) :
+# le playbook ne touche jamais aux disques, il surveille et alerte.
+
+# --- RAID logiciel (mdadm) -------------------------------------------------
+- name: Grappes RAID présentes ?
+  ansible.builtin.slurp:
+    src: /proc/mdstat
+  register: storage_mdstat
+  failed_when: false
+
+- name: État des grappes
+  ansible.builtin.set_fact:
+    storage_has_raid: "{{ (storage_mdstat.content | default('') | b64decode) is search('^md\\d+ : active', multiline=True) }}"
+    # Un "_" dans [UU] signale un disque manquant ou en panne : [U_]
+    storage_raid_degraded: "{{ (storage_mdstat.content | default('') | b64decode) is search('\\[U*_+U*\\]') }}"
+
+- name: Outils et surveillance RAID
+  when: storage_has_raid
+  block:
+    - name: Paquet mdadm (surveillance incluse via mdmonitor)
+      ansible.builtin.apt:
+        name: mdadm
+        state: present
+
+    - name: Surveillance RAID active
+      ansible.builtin.systemd_service:
+        name: mdmonitor
+        enabled: true
+        state: started
+
+- name: ALERTE - grappe RAID dégradée
+  ansible.builtin.fail:
+    msg: >-
+      Une grappe RAID est DÉGRADÉE (un disque manque ou est en panne).
+      Contenu de /proc/mdstat :
+      {{ storage_mdstat.content | b64decode }}
+      Procédure de remplacement : README, section Stockage.
+  when: storage_has_raid and storage_raid_degraded
+
+# --- SMART (machine physique uniquement : une VM n'expose pas de SMART) ----
+- name: Surveillance SMART
+  when: ansible_facts.virtualization_role | default('') != 'guest'
+  block:
+    - name: Paquet smartmontools
+      ansible.builtin.apt:
+        name: smartmontools
+        state: present
+
+    - name: Configuration smartd
+      ansible.builtin.template:
+        src: smartd.conf.j2
+        dest: /etc/smartd.conf
+        mode: "0644"
+      notify: Redémarrer smartd
+
+    - name: Service smartd
+      ansible.builtin.systemd_service:
+        name: smartd
+        enabled: true
+        state: started

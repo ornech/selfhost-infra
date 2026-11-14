@@ -18,8 +18,13 @@ continuant à les exploiter est la clé de la résilience numérique en temps de
 - Le playbook est **rejouable** : l'hôte n'est pas une pièce unique, il se
   reconstruit sur une autre machine (VM, serveur, VPS) en une commande.
 - Aucune configuration faite à la main sur l'hôte : tout est dans Git.
-- *À faire* : sauvegarde chiffrée et **hors site** des volumes applicatifs,
-  avec un test de restauration réel.
+- Sauvegarde restic chiffrée, règle 3-2-1, avec une copie **hors site en
+  ajout seul** : le serveur peut écrire, jamais effacer. Prendre le serveur ne
+  suffit pas à détruire l'historique (un rançongiciel ne peut pas l'atteindre).
+- Vérification d'intégrité hebdomadaire et procédure de test de restauration :
+  une sauvegarde jamais restaurée n'est qu'un espoir.
+- Miroir RAID 1 et surveillance SMART contre la panne matérielle, en sachant
+  qu'un miroir recopie aussi les dégâts : il ne remplace pas la sauvegarde.
 
 ## 2. Micro-segmenter
 

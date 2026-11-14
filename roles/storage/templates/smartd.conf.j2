@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Tous les disques détectés :
+#  -a        : surveiller tous les attributs SMART et l'état de santé
+#  -o on     : collecte automatique hors ligne
+#  -S on     : sauvegarde automatique des attributs
+#  -n standby,q : ne pas réveiller un disque en veille
+#  -s ...    : test court chaque nuit à 2 h, test long le samedi à 3 h
+#  -W 4,45,55: signaler une hausse de 4 °C, info à 45 °C, alerte à 55 °C
+#  -m root   : alerte au compte root (journal système ; e-mail si un MTA est configuré)
+DEVICESCAN -a -o on -S on -n standby,q -s (S/../.././02|L/../../6/03) -W 4,45,55 -m root
