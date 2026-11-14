@@ -27,6 +27,7 @@ Internet ──► Freebox (redirection 80/443) ──► hôte Debian 13
 | `base` | compte admin par clé, sshd durci, nftables, sysctl, unattended-upgrades, rsyslog |
 | `edge` | HAProxy, certbot + plugin DNS, CrowdSec + bouncer nftables |
 | `podman` | Podman 5, utilisateur `stack` sans shell, linger systemd |
+| `status` | page d'état en lecture seule (relevé périodique → fichiers statiques → nginx sans privilège) |
 | `apps` | contrôle des empreintes d'images, secrets Podman, unités Quadlet |
 | `storage` | surveillance RAID (mdadm) et SMART ; arrêt si miroir dégradé |
 | `backup` | restic : exports, sauvegarde quotidienne multi-dépôts, vérification hebdomadaire |
@@ -277,7 +278,77 @@ une fois qu'il contient du contenu** (restaurer alors `club.sql`, ou lever le ve
 **Reste à vérifier avant la production** : les droits du volume `club-content`, et une
 restauration réelle depuis `club.sql`.
 
+## Page d'état
+
+Une page en **lecture seule** compare ce que le playbook déclare à ce qui tourne
+réellement : `https://etat.<domaine>:8443`, joignable depuis le LAN et le VPN
+comme `whoami` (frontal privé : nftables puis HAProxy). Rien ne s'y commande :
+la configuration reste dans Git et dans Ansible.
+
+**Fonctionnement.** Une minuterie systemd (`selfhost-status.timer`, toutes les
+5 minutes) lance `/usr/local/sbin/selfhost-status`, qui écrit `index.html` et
+`status.json` dans `/srv/status/www`. Un conteneur nginx sans privilège (entrée
+`etat` de `private_hosts`, image épinglée) les sert en lecture seule. Aucun
+processus privilégié n'écoute sur le réseau. La liste attendue (services,
+conteneurs, sites) est écrite par Ansible dans `/etc/selfhost-status/config.json` :
+une unité qui disparaît est un **problème**, pas une ligne qui s'efface.
+
+| Groupe | Vérifié |
+|---|---|
+| Sites | backend HAProxy `UP`, et réponse HTTP réelle (public : à travers HAProxy en TLS ; privé : directement sur l'application) ; 5xx = rouge, 4xx = orange |
+| Applications | chaque conteneur et chaque conteneur annexe (base) de `stack` ; orange à partir de 5 redémarrages |
+| Services du système | ssh, nftables, rsyslog, HAProxy, CrowdSec et son bouncer, certbot, mises à jour, minuteries de sauvegarde, smartd, mdmonitor |
+| Certificat TLS | jours restants (orange < 21, rouge < 7), autorité (test ou production selon `acme_staging`), et **le certificat servi par HAProxy est bien celui du disque** (détecte un hook de renouvellement ou un rechargement en échec) |
+| Sauvegardes | dernier instantané **lu dans chaque dépôt** (orange > 36 h, rouge > 72 h ; `status_backup_max_age_hours`), échec de la tâche, vérification hebdomadaire |
+| Sécurité | politique `drop` de nftables, tables du bouncer, bouncer CrowdSec qui interroge le moteur, configuration **effective** de sshd (`sshd -T`), ports en écoute hors boucle locale non prévus (avec le processus) |
+| Stockage | RAID dégradé ou en reconstruction, verdict SMART, espace disque et inodes (orange 80 %, rouge 90 %) |
+| Hôte | charge, mémoire, horloge NTP, mises à jour en attente (dont sécurité), noyau plus récent installé, unités systemd en échec |
+
+Quatre états : **OK**, **Info**, **Attention**, **Problème**, plus **Inconnu** :
+un contrôle qui n'a pas pu répondre n'est jamais compté comme un succès. La page
+affiche l'âge du relevé et passe un bandeau rouge si plus rien ne la met à jour
+(15 minutes). Pour un site qui répond autrement que 2xx/3xx par conception,
+déclarer dans son entrée de `public_hosts` / `private_hosts` :
+
+```yaml
+    probe_path: /ghost/api/admin/site/   # défaut : /
+    probe_ok: [401]                      # codes HTTP en plus de 2xx/3xx
+```
+
+Commandes utiles :
+
+```bash
+sudo /usr/local/sbin/selfhost-status --text   # relevé immédiat, dans le terminal
+sudo systemctl start selfhost-status          # relevé immédiat, dans la page
+systemctl list-timers selfhost-status.timer
+sudo journalctl -u selfhost-status -n 20
+```
+
+**Limites à connaître.**
+
+- La page vit sur l'hôte : si l'hôte tombe, elle ne dit rien. `status.json`
+  (champs `overall` et `generated_at`) est fait pour une sonde extérieure, par
+  exemple la machine de sauvegarde qui l'interroge par WireGuard.
+- Il n'y a pas d'alerte : il faut ouvrir la page.
+- Les mesures lentes ou distantes sont mémorisées : sauvegardes 30 min, mises à
+  jour et SMART 1 h.
+- La page prouve que des instantanés **existent** dans le dépôt, pas qu'ils se
+  **restaurent** : le test de restauration mensuel reste indispensable.
+- L'écart avec Git n'est pas mesuré : `ansible-playbook site.yml --check --diff`.
+- Sur une machine neuve, le rôle `status` se joue **avant** `apps` (le conteneur
+  monte `/srv/status/www`) : ne pas lancer `--tags apps` seul avant la première
+  passe complète. Le premier relevé a lieu 30 s après l'activation de la minuterie.
+
+Tests du script (analyseurs, décisions, sonde HTTP/TLS contre de faux serveurs) :
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 ## Exploitation
+
+La page d'état (section précédente) couvre l'essentiel au quotidien ; les
+commandes ci-dessous servent à creuser.
 
 ```bash
 # Applications
@@ -337,6 +408,17 @@ CrowdSec ignore les adresses privées : les requêtes du LAN ne déclenchent pas
 bannissement. Pour tester le blocage dans le noyau, utiliser une adresse de
 documentation : `sudo cscli decisions add --ip 192.0.2.99 --duration 5m`, puis
 `sudo nft list table ip crowdsec`, puis `sudo cscli decisions delete --ip 192.0.2.99`.
+
+**Page d'état** : 34 tests (analyseurs sur des sorties réelles de systemctl,
+HAProxy, mdstat, nft, `/proc/net/tcp` ; sonde HTTP, TLS et certificat servi contre
+de faux serveurs ; une fuite d'identifiants restic et une injection HTML
+cherchées sans succès), vérifiés aussi par mutation (casser un seuil ou une
+comparaison fait échouer un test) ; rendu des gabarits Ansible ; page vue en
+clair, en sombre et sur mobile. **Non vérifié sur la VM** : l'exécution du
+service sous ses restrictions systemd (`ProtectSystem=full`, `NoNewPrivileges`)
+avec `runuser`, `cscli` et `restic` ; nginx sans privilège avec `ReadOnly=true`
+et un dossier hôte monté ; le format JSON de `cscli bouncers list` selon la
+version de CrowdSec. Un contrôle qui échoue s'affiche « inconnu » avec sa cause.
 
 **Non vérifié** : le renouvellement automatique du certificat (hook compris),
 les sauvegardes restic et la cible `rest-server` (aucun dépôt configuré pendant

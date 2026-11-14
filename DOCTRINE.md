@@ -81,6 +81,13 @@ ministère ukrainien recommande de se raccorder aux plateformes d'échange MISP.
   noyau** (nftables) avant même qu'HAProxy ne voie la connexion.
 - Il bénéficie du renseignement communautaire (listes d'IP signalées par
   l'ensemble des instances).
+- Une **page d'état en lecture seule**, réservée aux réseaux d'administration,
+  compare ce que le playbook déclare à ce qui tourne : une unité disparue, un
+  pare-feu ouvert, un certificat renouvelé mais pas servi, une sauvegarde
+  périmée y sont rouges. Un contrôle qui ne peut pas répondre s'affiche
+  « inconnu », jamais « OK », et un relevé qui n'est plus mis à jour le dit.
+  Elle ne commande rien : une interface qui contrôlerait tout serait la cible
+  la plus rentable de l'infra (points 1, 2 et 4).
 - *À explorer* : règles Sigma (SOC Prime, équipe en Ukraine, en lien avec
   CERT-UA) et flux MISP pour une couche de détection supplémentaire.
 

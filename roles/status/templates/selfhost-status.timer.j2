@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Relevé d'état de l'hôte, toutes les {{ status_interval }} (selfhost)
+
+[Timer]
+# Premier relevé 30 s après l'activation de la minuterie, puis à intervalle fixe
+OnActiveSec=30s
+OnUnitActiveSec={{ status_interval }}
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

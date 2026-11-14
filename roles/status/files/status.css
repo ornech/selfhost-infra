@@ -1,0 +1,114 @@
+/* Géré par Ansible (rôle status). Aucune ressource externe : la page est servie
+   avec une politique CSP « default-src 'none' ». */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f8fa;
+  --card: #ffffff;
+  --text: #1f2328;
+  --muted: #59636e;
+  --line: #d1d9e0;
+  --link: #0550ae;
+  --ok-fg: #116329;      --ok-bg: #dafbe1;
+  --info-fg: #0550ae;    --info-bg: #ddf4ff;
+  --warn-fg: #7d4e00;    --warn-bg: #fff8c5;
+  --crit-fg: #a40e26;    --crit-bg: #ffebe9;
+  --unknown-fg: #4b5560; --unknown-bg: #e8ecf0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --card: #151b23;
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --line: #30363d;
+    --link: #79c0ff;
+    --ok-fg: #56d364;      --ok-bg: #12261e;
+    --info-fg: #79c0ff;    --info-bg: #0c2d4a;
+    --warn-fg: #e3b341;    --warn-bg: #2d2411;
+    --crit-fg: #ff7b72;    --crit-bg: #3a1618;
+    --unknown-fg: #b1bac4; --unknown-bg: #262c36;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main { max-width: 64rem; margin: 0 auto; padding: 1rem; }
+a { color: var(--link); }
+h1 { font-size: 1.5rem; margin: 0.5rem 0 0; }
+h2 { font-size: 1.05rem; margin: 0; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line); }
+.meta { color: var(--muted); margin: 0.1rem 0 1rem; }
+
+section {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 0 0 1rem;
+  overflow: hidden;
+}
+
+.overall { padding: 0.9rem 1rem; border-left-width: 6px; }
+.overall .headline { font-size: 1.2rem; font-weight: 650; margin: 0; }
+.overall .summary { margin: 0.2rem 0 0; color: var(--muted); }
+.overall[data-level="ok"] { border-left-color: var(--ok-fg); }
+.overall[data-level="warn"] { border-left-color: var(--warn-fg); }
+.overall[data-level="crit"] { border-left-color: var(--crit-fg); }
+.overall[data-level="unknown"] { border-left-color: var(--unknown-fg); }
+
+.stale {
+  background: var(--crit-bg);
+  color: var(--crit-fg);
+  border: 1px solid var(--crit-fg);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  margin: 0 0 1rem;
+  font-weight: 600;
+}
+
+.todo ul { margin: 0; padding: 0.5rem 0.9rem 0.7rem 2rem; }
+.todo li { margin: 0.3rem 0; }
+.todo li[data-level="crit"] strong { color: var(--crit-fg); }
+.todo li[data-level="warn"] strong { color: var(--warn-fg); }
+.todo li[data-level="unknown"] strong { color: var(--unknown-fg); }
+
+.rows { list-style: none; margin: 0; padding: 0; }
+.row {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(9rem, 17rem) 1fr;
+  gap: 0.2rem 0.8rem;
+  align-items: baseline;
+  padding: 0.5rem 0.9rem;
+  border-top: 1px solid var(--line);
+}
+.row:first-child { border-top: 0; }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.detail { color: var(--muted); overflow-wrap: anywhere; }
+
+.badge {
+  display: inline-block;
+  justify-self: start;
+  padding: 0.05rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+[data-level="ok"] > .badge { color: var(--ok-fg); background: var(--ok-bg); }
+[data-level="info"] > .badge { color: var(--info-fg); background: var(--info-bg); }
+[data-level="warn"] > .badge { color: var(--warn-fg); background: var(--warn-bg); }
+[data-level="crit"] > .badge { color: var(--crit-fg); background: var(--crit-bg); }
+[data-level="unknown"] > .badge { color: var(--unknown-fg); background: var(--unknown-bg); }
+
+footer { color: var(--muted); font-size: 0.85rem; padding: 0 0 1rem; }
+
+@media (max-width: 40rem) {
+  .row { grid-template-columns: 1fr; padding: 0.6rem 0.9rem; }
+}

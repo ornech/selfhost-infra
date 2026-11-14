@@ -1,0 +1,99 @@
+---
+# Page d'état en lecture seule. Un relevé périodique (minuterie systemd, root)
+# écrit des fichiers statiques ; une application PRIVÉE (nginx sans privilège,
+# entrée `etat` de private_hosts) les sert. Aucun processus privilégié n'écoute.
+#
+# À jouer AVANT le rôle apps : le conteneur monte {{ status_www }}, qui doit
+# exister au démarrage (site.yml).
+
+- name: Garde-fou - l'application privée qui sert la page est déclarée
+  ansible.builtin.assert:
+    that:
+      - private_hosts | selectattr('name', 'equalto', status_host) | list | length == 1
+      - >-
+        private_hosts | selectattr('name', 'equalto', status_host)
+        | map(attribute='volumes', default=[]) | flatten
+        | select('match', status_www ~ ':') | list | length == 1
+    fail_msg: >-
+      Entrée « {{ status_host }} » absente de private_hosts, ou elle ne monte pas
+      {{ status_www }} dans ses volumes. Reprendre l'entrée « etat » et l'image « nginx »
+      de group_vars/all/main.yml (README, « Page d'état »).
+    quiet: true
+
+- name: Paquet openssl (lecture de la date d'expiration des certificats)
+  ansible.builtin.apt:
+    name: openssl
+    state: present
+
+- name: Répertoires
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ status_dir }}", mode: "0755" }
+    - { path: "{{ status_www }}", mode: "0755" }
+    - { path: /etc/selfhost-status, mode: "0750" }
+
+- name: Script de relevé
+  ansible.builtin.copy:
+    src: selfhost-status.py
+    dest: /usr/local/sbin/selfhost-status
+    owner: root
+    group: root
+    mode: "0700"
+
+# Ce que le playbook déclare ; le script le compare à ce qui tourne réellement.
+# Aucun secret : les dépôts de sauvegarde n'y figurent que par leur nom.
+- name: Configuration du relevé
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/selfhost-status/config.json
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Feuille de style et script de la page
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ status_www }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - status.css
+    - status.js
+
+# Servie tant que le premier relevé n'a pas eu lieu (30 s après la minuterie) ;
+# jamais réécrite ensuite (force: false), le relevé la remplace.
+- name: Page d'attente
+  ansible.builtin.copy:
+    src: placeholder.html
+    dest: "{{ status_www }}/index.html"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+
+- name: Unités systemd (service + minuterie)
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - selfhost-status.service
+    - selfhost-status.timer
+  notify: Recharger systemd (page d'état)
+
+- name: Appliquer les unités
+  ansible.builtin.meta: flush_handlers
+
+- name: Minuterie active
+  ansible.builtin.systemd_service:
+    name: selfhost-status.timer
+    enabled: true
+    state: started

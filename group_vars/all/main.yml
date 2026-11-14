@@ -51,6 +51,8 @@ images:
   whoami: "docker.io/traefik/whoami:v1.10"   # remplacer par la sortie de pin-digests.sh
   ghost: "docker.io/library/ghost:6-alpine@sha256:a1c2adb3ab81b6d3fcae4d33bebe56a94a57c3e76c2f0b7b3d213726b2ca8922"
   mysql: "docker.io/library/mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902"   # Ghost n'est supporté qu'avec MySQL 8
+  # Sert la page d'état (ligne stable de nginx, variante sans privilège : utilisateur 101, port 8080)
+  nginx: "docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:f5116ed4606f3eb015dd4a8e28cb9b351476dc0ad4bc6e9f93b19cec130cdf03"
 
 # Sous-domaines publics : exposés sur 443 à tout Internet
 public_hosts:
@@ -106,6 +108,14 @@ private_hosts:
     port: 8082
     container_port: 8080
     args: "--port 8080 --name service-prive"
+
+  # Page d'état (rôle status) : fichiers statiques écrits par la minuterie
+  # selfhost-status, servis en lecture seule. Le volume doit être status_www.
+  - name: etat
+    image: nginx
+    port: 8084
+    container_port: 8080
+    volumes: ["/srv/status/www:/usr/share/nginx/html:ro"]
 
 # Limitation de débit HAProxy : requêtes max par IP sur 10 s. L'interface
 # d'administration de Ghost charge une centaine de fichiers d'un coup.

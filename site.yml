@@ -11,6 +11,8 @@
       tags: [edge]
     - role: podman     # Podman rootless, utilisateur dédié
       tags: [podman]
+    - role: status     # page d'état (lecture seule) ; AVANT apps : le conteneur monte son dossier
+      tags: [status]
     - role: apps       # applications en unités Quadlet, sur 127.0.0.1
       tags: [apps]
     - role: backup     # restic : sauvegarde quotidienne, vérification hebdomadaire

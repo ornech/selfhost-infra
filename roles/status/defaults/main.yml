@@ -1,0 +1,39 @@
+---
+# Page d'état en lecture seule : un relevé périodique (minuterie systemd, root)
+# écrit des fichiers statiques que sert une application PRIVÉE (voir l'entrée
+# `etat` de private_hosts dans group_vars/all/main.yml).
+
+# Nom de l'entrée de private_hosts qui sert la page
+status_host: etat
+status_dir: /srv/status
+status_www: "{{ status_dir }}/www"
+
+# Fréquence du relevé (OnUnitActiveSec) et âge au-delà duquel la page affiche
+# elle-même « données périmées » (trois relevés manqués)
+status_interval: 5min
+status_stale_after: 900
+
+# Sauvegarde plus ancienne que cela : orange ; deux fois plus : rouge.
+# À adapter si backup_schedule n'est plus quotidien.
+status_backup_max_age_hours: 36
+
+# Ports TCP attendus en écoute hors boucle locale, en plus de 22, 80, 443 et
+# 8443. Tout autre port exposé est signalé sur la page.
+status_extra_listen_ports: []
+
+# Systèmes de fichiers surveillés (chemins ; ceux d'un même disque sont groupés)
+status_disk_paths: [/, /var, /home, /srv, /var/backups]
+
+# Services dont l'état est vérifié. S'y ajoutent, selon la machine : les
+# minuteries de sauvegarde (si backup_repositories n'est pas vide), smartd
+# (machine physique) et mdmonitor (si une grappe RAID existe).
+status_system_units:
+  - ssh.service
+  - nftables.service
+  - rsyslog.service
+  - haproxy.service
+  - crowdsec.service
+  - crowdsec-firewall-bouncer.service
+  - certbot.timer
+  - apt-daily.timer
+  - apt-daily-upgrade.timer

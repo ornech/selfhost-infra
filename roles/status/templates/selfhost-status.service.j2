@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Relevé d'état de l'hôte (selfhost, lecture seule)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/selfhost-status
+UMask=0022
+StateDirectory=selfhost-status
+StateDirectoryMode=0700
+TimeoutStartSec=180
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+
+# Le relevé lit des sockets et des fichiers réservés à root : il tourne en root,
+# mais n'écoute sur aucun port et ne modifie rien hors de son dossier de sortie.
+# Pas de ProtectSystem=strict : cscli (base SQLite) et restic (cache) écrivent
+# dans /var/lib et /root ; « full » protège /usr, /boot et /etc.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true

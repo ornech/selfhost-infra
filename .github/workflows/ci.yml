@@ -36,6 +36,18 @@ jobs:
           tar -xzf "$archive" gitleaks
           ./gitleaks detect --source . --redact --verbose
 
+  status-tests:
+    name: Tests du relevé d'état
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Même version de Python que Debian 13 (la cible)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Tests (bibliothèque standard seulement)
+        run: python3 -I -m unittest discover -s tests -v
+
   lint:
     name: Lint Ansible
     runs-on: ubuntu-latest

@@ -1,0 +1,56 @@
+{#- Configuration du relevé : ce que l'Ansible DÉCLARE, que le script compare à ce qui TOURNE.
+    JSON n'admet pas de commentaire : l'en-tête « géré par Ansible » est dans le script. -#}
+{% set smart = (ansible_facts.virtualization_role | default('')) != 'guest' %}
+{% set repos = backup_repositories | default([]) %}
+{% set units = status_system_units
+               + (['selfhost-backup.timer', 'selfhost-backup-check.timer'] if repos | length > 0 else [])
+               + (['smartd.service'] if smart else []) %}
+{% set app_units = [] %}
+{% for u in apps_units %}
+{% set base = 'app-' ~ u.kind ~ '-' ~ u.name %}
+{% set _ = app_units.append({
+     'unit': base ~ '.service',
+     'label': u.name,
+     'role': 'application ' ~ ('publique' if u.kind == 'pub' else 'privée'),
+   }) %}
+{% for s in u.sidecars | default([]) %}
+{% set _ = app_units.append({
+     'unit': base ~ '-' ~ s.name ~ '.service',
+     'label': u.name ~ ' / ' ~ s.name,
+     'role': 'conteneur annexe de ' ~ u.name,
+   }) %}
+{% endfor %}
+{% endfor %}
+{% set sites = [] %}
+{% for kind, hosts in [('pub', public_hosts), ('priv', private_hosts)] %}
+{% for h in hosts %}
+{% set _ = sites.append({
+     'host': h.name ~ '.' ~ domain,
+     'kind': kind,
+     'port': h.port | int,
+     'backend': 'be_' ~ kind ~ '_' ~ h.name,
+     'server': h.name,
+     'url': 'https://' ~ h.name ~ '.' ~ domain ~ (':8443' if kind == 'priv' else '') ~ '/',
+     'probe_path': h.probe_path | default('/'),
+     'probe_ok': h.probe_ok | default([]) | map('int') | list,
+   }) %}
+{% endfor %}
+{% endfor %}
+{% set cfg = {
+     'domain': domain,
+     'acme_staging': acme_staging | bool,
+     'stack_user': stack_user,
+     'stack_uid': stack_uid | int,
+     'stale_after': status_stale_after | int,
+     'smart_expected': smart,
+     'system_units': units,
+     'app_units': app_units,
+     'sites': sites,
+     'backup': {
+       'repos': repos | map(attribute='name') | list,
+       'max_age_hours': status_backup_max_age_hours | int,
+     },
+     'listen_allowed': [22, 80, 443, 8443] + (status_extra_listen_ports | map('int') | list),
+     'disk_paths': status_disk_paths,
+   } %}
+{{ cfg | to_nice_json(indent=2, sort_keys=True) }}
