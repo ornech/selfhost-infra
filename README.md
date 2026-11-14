@@ -89,9 +89,13 @@ ADMIN=jf
 **3. Report dans `group_vars/all/main.yml`**
 
 ```bash
-sed -i "s|^domain: .*|domain: $DOMAINE|" group_vars/all/main.yml
-sed -i "s|^acme_email: .*|acme_email: $EMAIL|" group_vars/all/main.yml
-sed -i "s|^admin_user: .*|admin_user: $ADMIN|" group_vars/all/main.yml
+if [ -n "$DOMAINE" ] && [ -n "$EMAIL" ] && [ -n "$ADMIN" ]; then
+  sed -i "s|^domain: .*|domain: $DOMAINE|" group_vars/all/main.yml
+  sed -i "s|^acme_email: .*|acme_email: $EMAIL|" group_vars/all/main.yml
+  sed -i "s|^admin_user: .*|admin_user: $ADMIN|" group_vars/all/main.yml
+else
+  echo "ÉCHEC : DOMAINE, EMAIL ou ADMIN est vide : refaire l'étape 2"
+fi
 CLE=$(grep -m1 '^ssh-' ~/.ssh/authorized_keys)
 sed -i "s|^  - \"ssh-ed25519 AAAA...remplace-moi jf@poste\"|  - \"$CLE\"|" group_vars/all/main.yml
 grep -nE '^(domain|acme_email|admin_user):|^  - "ssh' group_vars/all/main.yml
@@ -135,10 +139,12 @@ La dernière ligne doit afficher `$ANSIBLE_VAULT;1.1;AES256`.
 **6. Épinglage de l'image par empreinte**
 
 ```bash
-skopeo inspect --raw docker://docker.io/traefik/whoami:v1.10 > /tmp/manifeste.json
-test -s /tmp/manifeste.json && echo "manifeste OK" || echo "ÉCHEC : ne pas continuer"
-DIGEST=sha256:$(sha256sum /tmp/manifeste.json | cut -d' ' -f1)
-sed -i "s|^  whoami: \"docker.io/traefik/whoami:v1.10\"|  whoami: \"docker.io/traefik/whoami:v1.10@$DIGEST\"|" group_vars/all/main.yml
+if skopeo inspect --raw docker://docker.io/traefik/whoami:v1.10 > /tmp/manifeste.json && [ -s /tmp/manifeste.json ]; then
+  DIGEST=sha256:$(sha256sum /tmp/manifeste.json | cut -d' ' -f1)
+  sed -i "s|^  whoami: \"docker.io/traefik/whoami:v1.10\"|  whoami: \"docker.io/traefik/whoami:v1.10@$DIGEST\"|" group_vars/all/main.yml
+else
+  echo "ÉCHEC : manifeste non lu, rien n'est épinglé"
+fi
 grep -n '  whoami:' group_vars/all/main.yml
 ```
 
