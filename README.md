@@ -101,36 +101,36 @@ sed -i "s|^  - \"ssh-ed25519 AAAA...remplace-moi jf@poste\"|  - \"$CLE\"|" group
 grep -nE '^(domain|acme_email|admin_user):|^  - "ssh' group_vars/all/main.yml
 ```
 
-**4. Identifiants OVH** : saisis sans affichage et sans trace dans l'historique.
-Coller **une ligne à la fois** (chaque ligne attend ta saisie).
+**4. Jeton d'API Cloudflare** : saisi sans affichage et sans trace dans l'historique.
 
 ```bash
-read -rp "application_key : " OVH_AK
+read -rsp "Jeton Cloudflare : " CF_TOKEN; echo
 ```
 
-```bash
-read -rsp "application_secret : " OVH_AS; echo
-```
+La commande attend ta saisie : colle le jeton à l'invite, puis Entrée (rien ne
+s'affiche). Le dernier mot, `CF_TOKEN`, est le **nom** de la variable, pas la
+valeur. Contrôle que la longueur n'est pas nulle (53 pour un jeton `cfut_…`) :
 
 ```bash
-read -rsp "consumer_key : " OVH_CK; echo
+echo "longueur : ${#CF_TOKEN}"
 ```
 
 **5. Création et chiffrement du vault**
 
 ```bash
+if [ -n "$CF_TOKEN" ]; then
 cat > group_vars/all/vault.yml <<FIN
 ---
 vault_certbot_dns_credentials: |
-  dns_ovh_endpoint = ovh-eu
-  dns_ovh_application_key = $OVH_AK
-  dns_ovh_application_secret = $OVH_AS
-  dns_ovh_consumer_key = $OVH_CK
+  dns_cloudflare_api_token = $CF_TOKEN
 vault_app_secrets: {}
 FIN
 chmod 600 group_vars/all/vault.yml
 ansible-vault encrypt group_vars/all/vault.yml
-unset OVH_AK OVH_AS OVH_CK
+else
+  echo "ÉCHEC : jeton vide, le vault n'est pas modifié"
+fi
+unset CF_TOKEN
 head -1 group_vars/all/vault.yml
 ```
 
@@ -186,7 +186,9 @@ VM validée, passer à `false` et rejouer : le certificat est réémis en produc
 - `CAA 0 issue "letsencrypt.org"`.
 - Freebox OS : bail DHCP statique, redirection **TCP 80 et 443 uniquement**.
   Le port 8443 n'est **pas** redirigé : il n'est joignable que depuis le LAN et le VPN.
-- Clé d'API DNS limitée à la seule zone (OVH : `GET/POST/DELETE /domain/zone/<domaine>/*`).
+- Jeton d'API DNS limité à la seule zone (Cloudflare : `Zone → DNS → Edit` et
+  `Zone → Zone → Read`). Le plugin OVH n'existe pas dans Debian 13 : voir
+  `certbot_dns_plugin` dans `group_vars/all/main.yml`.
 
 ## Ajouter une application
 

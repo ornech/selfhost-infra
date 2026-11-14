@@ -4,15 +4,11 @@
 
 # Contenu du fichier d'identifiants du plugin certbot DNS choisi
 # (/etc/letsencrypt/dns-<plugin>.ini, mode 0600). Clés propres à chaque plugin.
-# OVH : créer une clé limitée à la zone sur https://eu.api.ovh.com/createToken/
-#   droits : GET/POST/DELETE sur /domain/zone/<domaine>/*
+# Cloudflare (plugin par défaut) : jeton d'API limité à la seule zone.
+#   droits utilisés lors des tests : Zone → DNS → Edit et Zone → Zone → Read
+# Le plugin OVH n'existe pas dans Debian 13 (voir certbot_dns_plugin).
 vault_certbot_dns_credentials: |
-  dns_ovh_endpoint = ovh-eu
-  dns_ovh_application_key = changeme
-  dns_ovh_application_secret = changeme
-  dns_ovh_consumer_key = changeme
-# Cloudflare (token limité à Zone:DNS:Edit sur la seule zone) :
-#   dns_cloudflare_api_token = changeme
+  dns_cloudflare_api_token = changeme
 
 # Secrets des applications : nom du secret Podman -> valeur.
 # Utilisés dans les unités Quadlet via Secret=<nom>.

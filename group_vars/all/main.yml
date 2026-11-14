@@ -22,9 +22,11 @@ admin_cidrs_v4:
 admin_cidrs_v6: []
 
 # --- Certificat wildcard via DNS-01 (certbot, paquet Debian) ----------------
-# Plugin certbot : cloudflare, ovh, google, route53, desec, ...
-# Paquet installé : python3-certbot-dns-<plugin>
-certbot_dns_plugin: ovh
+# Plugin certbot, paquet installé : python3-certbot-dns-<plugin>.
+# Disponibles dans Debian 13 : cloudflare, desec, google, infomaniak, rfc2136,
+# route53, standalone. Pas "ovh" : ce paquet n'existe pas dans Debian 13.
+# Plugin testé sur Debian 13 : cloudflare.
+certbot_dns_plugin: cloudflare
 certbot_dns_propagation_seconds: 120
 
 # --- CrowdSec (dépôt APT officiel, signé) -----------------------------------
