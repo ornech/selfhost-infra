@@ -3,5 +3,6 @@
 # Les conteneurs partagent un même réseau (127.0.0.1) ; seul le port de
 # l'application est publié, et seulement sur la boucle locale de l'hôte.
 [Pod]
-PodName=app-{{ item.kind }}-{{ item.name }}
+# Le nom du pod doit différer de celui de tout conteneur (Podman refuse l'homonymie)
+PodName=app-{{ item.kind }}-{{ item.name }}-pod
 PublishPort=127.0.0.1:{{ item.port }}:{{ item.container_port }}

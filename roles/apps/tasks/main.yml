@@ -111,6 +111,18 @@
         daemon_reload: true
         scope: user
 
+    # Un pod déjà lancé garde son ancienne définition tant qu'il n'est pas
+    # redémarré (nom, ports publiés) ; ses conteneurs sont relancés ensuite.
+    - name: Redémarrer les pods dont la définition a changé
+      ansible.builtin.systemd_service:
+        name: "app-{{ item.item.kind }}-{{ item.item.name }}-pod.service"
+        scope: user
+        state: restarted
+      loop: "{{ apps_pods.results | default([]) }}"
+      loop_control:
+        label: "app-{{ item.item.kind }}-{{ item.item.name }}-pod"
+      when: item.changed  # noqa: no-handler
+
     # Annexes d'abord : la base doit répondre avant l'application. Si elle est
     # encore en démarrage, l'application échoue puis Restart=always la relance.
     - name: Démarrer / redémarrer les conteneurs annexes
@@ -130,3 +142,33 @@
       loop: "{{ apps_quadlets.results }}"
       loop_control:
         label: "app-{{ item.item.kind }}-{{ item.item.name }}"
+
+    # Un conteneur qui plante en boucle ne fait PAS échouer « systemctl start » :
+    # il démarre, puis meurt. On laisse systemd atteindre sa limite de
+    # redémarrage (le service passe alors en « failed »), puis on contrôle l'état.
+    - name: Laisser aux conteneurs le temps de démarrer (ou d'échouer)
+      ansible.builtin.pause:
+        seconds: 15
+      when: >-
+        apps_quadlets.changed or apps_quadlets_sidecars.changed
+        or apps_pods.changed | default(false) or apps_secret_files.changed
+
+    - name: Les applications sont actives
+      ansible.builtin.command:
+        argv: [systemctl, --user, is-active, "app-{{ item.kind }}-{{ item.name }}.service"]
+      loop: "{{ apps_units }}"
+      loop_control:
+        label: "app-{{ item.kind }}-{{ item.name }}"
+      register: apps_active
+      changed_when: false
+      failed_when: apps_active.stdout != 'active'
+
+    - name: Les conteneurs annexes sont actifs
+      ansible.builtin.command:
+        argv: [systemctl, --user, is-active, "app-{{ item.0.kind }}-{{ item.0.name }}-{{ item.1.name }}.service"]
+      loop: "{{ apps_sidecars }}"
+      loop_control:
+        label: "app-{{ item.0.kind }}-{{ item.0.name }}-{{ item.1.name }}"
+      register: apps_sidecars_active
+      changed_when: false
+      failed_when: apps_sidecars_active.stdout != 'active'

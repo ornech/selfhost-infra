@@ -67,6 +67,7 @@ public_hosts:
     image: ghost
     port: 8083
     container_port: 2368
+    user: 1000            # utilisateur « node » : sans capacité, l'image ne peut pas basculer de root vers node
     volumes: ["club-content:/var/lib/ghost/content"]
     secrets:
       - { name: club_db_password, env: database__connection__password }

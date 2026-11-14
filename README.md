@@ -257,9 +257,15 @@ backup_excludes:
   - "*/volumes/club-db/*"
 ```
 
-**À vérifier sur la VM avant la production** (le rendu des unités est testé, pas leur exécution) :
-`ReadOnly=true` avec les capacités accordées à MySQL, droits du volume `club-content`
-pour l'utilisateur `node` de Ghost, et une restauration réelle depuis `club.sql`.
+**Vérifié** : sur une VM Debian 13, MySQL démarre et s'initialise avec `ReadOnly=true` et les
+capacités listées. Ghost, testé isolément dans les mêmes contraintes, démarre en root puis
+bascule vers l'utilisateur `node` : sans capacité, cette bascule échoue (`failed switching to
+'node'`). L'option `user: 1000` le lance directement en `node`. Le playbook contrôle en fin
+de passage que chaque conteneur est actif : un conteneur qui plante en boucle ne fait pas
+échouer `systemctl start`.
+
+**Reste à vérifier avant la production** : les droits du volume `club-content`, et une
+restauration réelle depuis `club.sql`.
 
 ## Exploitation
 

@@ -22,6 +22,9 @@ PublishPort=127.0.0.1:{{ ctr.port }}:{{ ctr.container_port }}
 ReadOnly={{ ctr.read_only | default(true) | string | lower }}
 NoNewPrivileges=true
 DropCapability=all
+{% if ctr.user is defined %}
+User={{ ctr.user }}
+{% endif %}
 {% for cap in ctr.add_caps | default([]) %}
 AddCapability={{ cap }}
 {% endfor %}
