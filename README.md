@@ -212,7 +212,7 @@ L'image doit exister pour l'architecture de la cible (`arm64` sur la VM Freebox)
 ```bash
 # Applications
 sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user status 'app-*'
-sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) podman ps
+(cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) podman ps)
 # Périmètre
 sudo cscli decisions list            # IP bannies
 sudo cscli metrics                   # lignes de journaux lues / parsées
