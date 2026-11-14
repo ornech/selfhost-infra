@@ -188,6 +188,11 @@ VM validée, passer à `false` et rejouer : le certificat est réémis en produc
 
 - DNS : `A` pour `example.fr` et `*.example.fr` → IPv4 full-stack. **Pas d'AAAA**
   tant que la Freebox fait routeur (son pare-feu IPv6 doit rester activé).
+  Créer aussi `A` pour `www` : un joker `*` ne s'applique pas à un nom qui
+  possède déjà un autre enregistrement (comme le TXT `www` que OVH ajoute par
+  défaut), et `www` ne résolvait pas tant que son `A` n'existait pas. Chez
+  Cloudflare, ces enregistrements étaient en « DNS only » (sans proxy) pendant
+  les tests.
 - `CAA 0 issue "letsencrypt.org"`.
 - Freebox OS : bail DHCP statique, redirection **TCP 80 et 443 uniquement**.
   Le port 8443 n'est **pas** redirigé : il n'est joignable que depuis le LAN et le VPN.
@@ -247,9 +252,38 @@ curl -skI https://inconnu.example.fr # connexion coupée sans réponse
   TLS 1.1 refusé, 429 au-delà de 100 requêtes / 10 s.
 - `nft -c` sur les règles générées ; générateur Quadlet en mode `-dryrun`.
 
-**Non vérifié** (accès réseau indisponible pendant la rédaction) : installation
-réelle des paquets sur Debian 13, émission du certificat, dépôt CrowdSec
-`any/any`. Le premier passage sur la VM fait office de recette.
+**Déploiement réel sur une VM Debian 13.7** (ansible-core 2.19.11, Podman
+5.4.2), rôle par rôle puis en une seule passe :
+
+- `base` : compte d'administration, sshd durci (connexion par mot de passe
+  refusée après rechargement), sudo, nftables, sysctl.
+- `storage` : RAID et SMART ignorés sur une VM.
+- `podman` et `apps` : utilisateur `stack` sans shell, image épinglée par
+  empreinte, unités Quadlet démarrées, ports `127.0.0.1` non joignables depuis
+  le réseau.
+- `edge` : certificat wildcard par DNS-01 chez Cloudflare, d'abord de test puis
+  de production ; HAProxy testé depuis un poste du LAN (200 sur `www`, 301
+  apex → `www` et HTTP → HTTPS, frontal privé accessible depuis le réseau
+  d'admin, hôte inconnu coupé) ; CrowdSec avec le dépôt `any/any`, bouncer
+  nftables qui applique puis retire une décision, lecture des journaux HAProxy
+  et SSH.
+- `backup` : restic installé, « sauvegarde non configurée » affiché.
+- Rejeu complet du playbook : `changed=0`.
+- Redémarrage de la VM : SSH durci, nftables, HAProxy, CrowdSec et les
+  applications reviennent seuls. Les applications démarrent environ 1 min 30
+  après le système (Podman attend `network-online.target`) : HAProxy répond
+  503 pendant ce délai.
+- Test depuis la 4G, par les redirections 80 et 443 de la Freebox.
+
+CrowdSec ignore les adresses privées : les requêtes du LAN ne déclenchent pas de
+bannissement. Pour tester le blocage dans le noyau, utiliser une adresse de
+documentation : `sudo cscli decisions add --ip 192.0.2.99 --duration 5m`, puis
+`sudo nft list table ip crowdsec`, puis `sudo cscli decisions delete --ip 192.0.2.99`.
+
+**Non vérifié** : le renouvellement automatique du certificat (hook compris),
+les sauvegardes restic et la cible `rest-server` (aucun dépôt configuré pendant
+les essais), la surveillance RAID et SMART (une VM n'expose pas de SMART) et la
+migration depuis Debian 12.
 
 ## Sauvegardes
 
