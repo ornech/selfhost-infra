@@ -58,36 +58,34 @@ cat /etc/debian_version     # 13.x attendu
 
 ## Mise en route
 
-Exécuter les étapes **une par une** (pas tout le bloc d'un coup) : chacune doit
-réussir avant la suivante.
+Aucun éditeur à ouvrir : chaque commande se colle seule.
 
 ```bash
-# 1. Outils : paquets Debian (signés, et contenant déjà les collections
-#    ansible.posix, community.general, containers.podman). Pas de pip.
-sudo apt install ansible skopeo python3-yaml git
-ansible --version
-ansible-galaxy collection list containers.podman
-ansible-galaxy collection list ansible.posix
+cd ~/selfhost-infra
+sudo apt install ansible skopeo python3-yaml git openssl
+```
 
-# 2. Mot de passe du vault : aléatoire, jamais versionné (.gitignore)
-openssl rand -base64 32 > .vault_pass && chmod 600 .vault_pass
+```bash
+scripts/init.sh
+```
 
-# 3. Secrets
-cp group_vars/all/vault.yml.example group_vars/all/vault.yml
-nano group_vars/all/vault.yml
-ansible-vault encrypt group_vars/all/vault.yml
+Le script pose les questions (domaine, e-mail, compte admin, fichier de clé
+SSH, plugin DNS et ses identifiants en saisie masquée), puis :
+génère `.vault_pass` (aléatoire), renseigne `group_vars/all/main.yml`, crée et
+chiffre `group_vars/all/vault.yml`, épingle les images par empreinte.
+Il peut être relancé : un vault déjà chiffré n'est pas écrasé.
 
-# 4. Variables : domaine, clé SSH, réseaux d'admin, plugin DNS, applications
-nano group_vars/all/main.yml
-nano inventory/hosts.yml
+```bash
+git diff group_vars/all/main.yml               # relire ce qui a changé
+ansible-playbook site.yml --check --diff -K    # à blanc
+```
 
-# 5. Épingler les images par empreinte, recopier le résultat dans main.yml
-scripts/pin-digests.sh
-
-# 6. Déployer (-K : mot de passe sudo du compte courant)
-ansible-playbook site.yml --check --diff -K
+```bash
 ansible-playbook site.yml -K
 ```
+
+Modifier un secret plus tard : `ansible-vault edit group_vars/all/vault.yml`
+(ouvre l'éditeur défini par `$EDITOR`, à lancer seule).
 
 ### Avant le premier passage : ne pas se couper l'accès
 

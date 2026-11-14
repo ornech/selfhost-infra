@@ -17,6 +17,13 @@ images = yaml.safe_load(open(sys.argv[1]))["images"]
 for k, v in images.items():
     print(k, v.split("@", 1)[0])   # repart du tag, ignore une ancienne empreinte
 PY
-  digest="sha256:$(skopeo inspect --raw "docker://$ref" | sha256sum | cut -d' ' -f1)"
+  tmp="$(mktemp)"
+  # Manifeste brut écrit dans un fichier : un échec réseau ne doit JAMAIS
+  # produire l'empreinte d'un contenu vide.
+  if ! skopeo inspect --raw "docker://$ref" > "$tmp" || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"; echo "Échec : impossible de lire le manifeste de $ref" >&2; exit 1
+  fi
+  digest="sha256:$(sha256sum "$tmp" | cut -d' ' -f1)"
+  rm -f "$tmp"
   printf '  %s: "%s@%s"\n' "$key" "$ref" "$digest"
 done
