@@ -2,6 +2,9 @@
 .vault_pass
 *.vault_pass
 
+# Identifiants locaux (clés d'API, etc.) : jamais dans Git
+.env
+
 # Rendus locaux / tests
 .render/
 *.retry
