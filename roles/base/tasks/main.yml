@@ -36,6 +36,16 @@
       donc la machine ne serait plus joignable. Voir README, étape 2.
     quiet: true
 
+- name: Garde-fou - ssh_lockdown vaut true ou false
+  ansible.builtin.assert:
+    that:
+      - ssh_lockdown is defined
+      - ssh_lockdown is boolean
+    fail_msg: >-
+      ssh_lockdown doit valoir true ou false (group_vars/all/main.yml), sans
+      guillemets. Il règle le verrouillage de SSH : voir README, étapes 9 et 10.
+    quiet: true
+
 - name: Garde-fou - clés SSH de l'administrateur
   ansible.builtin.assert:
     that:
@@ -72,13 +82,17 @@
     state: present
 
 # --- Compte d'administration (AVANT de durcir SSH pour ne pas se verrouiller)
+# C'est le compte que l'installateur Debian crée (README, « Les comptes ») : le
+# module le configure s'il existe, le crée sinon. root n'est jamais touché.
 - name: Utilisateur d'administration
   ansible.builtin.user:
     name: "{{ admin_user }}"
     groups: sudo
     append: true
     shell: /bin/bash
-    password: "!"          # pas de mot de passe : connexion par clé uniquement
+    # Mot de passe verrouillé seulement au verrouillage de SSH : jusque-là, celui
+    # choisi à l'installation reste un filet de sécurité si la clé était fausse.
+    password: "{{ '!' if ssh_lockdown | bool else omit }}"
 
 - name: Clés SSH de l'administrateur
   ansible.posix.authorized_key:
@@ -100,6 +114,14 @@
     dest: /etc/ssh/sshd_config.d/10-hardening.conf
     mode: "0644"
   notify: Vérifier et recharger sshd
+
+- name: Rappel - SSH n'est pas encore verrouillé
+  ansible.builtin.debug:
+    msg: >-
+      SSH n'est PAS verrouillé (ssh_lockdown: false) : le mot de passe de
+      {{ admin_user }} est encore accepté. Testez la connexion par clé, puis
+      passez ssh_lockdown à true et rejouez (README, étapes 9 et 10).
+  when: not (ssh_lockdown | bool)
 
 # --- Mises à jour de sécurité automatiques
 - name: Activer unattended-upgrades

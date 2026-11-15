@@ -60,15 +60,66 @@ sudo reboot
 cat /etc/debian_version     # 13.x attendu
 ```
 
+## Les comptes
+
+Trois comptes système, et aucun n'est destiné aux utilisateurs ordinaires : les
+membres de l'association ont leurs comptes dans les applications (Ghost, Gancio),
+jamais sur le serveur.
+
+| Compte | Rôle | UID | Connexion |
+|---|---|---|---|
+| `root` | Secours, **au clavier de la machine seulement** | 0 | Console. Jamais en SSH. Mot de passe testé |
+| `sysadmin` | Administration (`admin_user`) | 1000 | SSH par clé, `sudo` sans mot de passe ; mot de passe verrouillé à l'étape 10 |
+| `stack` | Applications (Podman sans privilèges) | 1500, fixe | Aucune : pas de shell, mot de passe verrouillé |
+
+- **Les personnes sont des clés, pas des comptes.** `admin_ssh_pubkeys` est une
+  liste : chaque administrateur y met sa propre clé publique, et les journaux SSH
+  enregistrent l'empreinte de la clé qui s'est connectée.
+- **`sysadmin` est le compte créé à l'installation de Debian** : il porte ce nom dès
+  le départ, le playbook le configure sans en créer un autre. Un autre nom reste
+  possible (`admin_user`), sauf `root`, que le playbook refuse.
+- **`root` n'est jamais modifié par le playbook.** C'est la porte de secours : si SSH
+  est mal réglé, on entre à l'écran de la machine.
+- Le compte avec lequel on lance le playbook n'est écrit nulle part dans la
+  configuration de sshd.
+
+**Installer Debian 13 pour ce dépôt** :
+
+- **Mot de passe root** : à définir, puis **à tester tout de suite** sur une seconde
+  console (`Alt+F2`). Un mot de passe tapé à l'aveugle peut différer du clavier
+  d'une session à l'autre.
+- **Utilisateur ordinaire** : nom complet « Administrateur système », identifiant
+  `sysadmin`.
+- **Logiciels** : « serveur SSH » et « utilitaires usuels du système », sans
+  environnement graphique.
+- **Disques** : partitionnement manuel et RAID 1 si la machine a deux disques
+  (section Stockage).
+
 ## Mise en route
 
 Chaque bloc se colle **seul**, dans l'ordre. Aucun éditeur, aucun script :
 chaque ligne dit ce qu'elle modifie, et une commande de contrôle suit.
 
-**0. Outils et dépôt**
+**0. Outils et dépôt.** Une seule fois, en root : donner `sudo` à `sysadmin`. Ce
+premier bloc se tape **seul** (la ligne suivante serait lue comme le mot de passe) :
 
 ```bash
-sudo apt install ansible skopeo git openssl
+su -
+```
+
+Puis, dans le shell root, ce bloc, qui se termine en ouvrant une session `sysadmin` :
+
+```bash
+apt install -y sudo
+usermod -aG sudo sysadmin
+su - sysadmin
+```
+
+Ensuite, **sous `sysadmin`** pour toute la suite :
+
+```bash
+sudo apt install -y ansible skopeo git openssl
+[ -d ~/selfhost-infra ] || git clone https://github.com/ornech/selfhost-infra.git ~/selfhost-infra
 cd ~/selfhost-infra && git pull
 ```
 
@@ -91,15 +142,11 @@ Le contrôle doit afficher un fichier de 45 octets, en `-rw-------`.
 ```bash
 DOMAINE=
 EMAIL=
-ADMIN=
 CLE=
 ```
 
 - `DOMAINE` : ton nom de domaine, celui de ta zone Cloudflare, sans `www`.
 - `EMAIL` : une adresse qui reçoit vraiment les courriers de Let's Encrypt.
-- `ADMIN` : le nom du compte d'administration, que **le playbook crée**.
-  **Jamais `root`** : ce compte reçoit un mot de passe verrouillé et sshd refuse
-  la connexion de root, la machine ne serait plus joignable.
 - `CLE` : la clé **publique** SSH de ton poste, sur une seule ligne et entre
   apostrophes (`CLE='ssh-ed25519 AAAA… commentaire'`). Sur ton poste, `cat ~/.ssh/id_ed25519.pub`
   l'affiche ; elle n'est pas secrète. Laisse `CLE=` vide seulement si tu es
@@ -111,12 +158,11 @@ déploiement avec des valeurs d'exemple.
 **3. Report dans `group_vars/all/main.yml`**
 
 ```bash
-if [ -n "$DOMAINE" ] && [ -n "$EMAIL" ] && [ -n "$ADMIN" ] && [ "$ADMIN" != root ]; then
+if [ -n "$DOMAINE" ] && [ -n "$EMAIL" ]; then
   sed -i "s|^domain: .*|domain: $DOMAINE|" group_vars/all/main.yml
   sed -i "s|^acme_email: .*|acme_email: $EMAIL|" group_vars/all/main.yml
-  sed -i "s|^admin_user: .*|admin_user: $ADMIN|" group_vars/all/main.yml
 else
-  echo "ÉCHEC : DOMAINE, EMAIL ou ADMIN est vide, ou ADMIN vaut root : refaire l'étape 2"
+  echo "ÉCHEC : DOMAINE ou EMAIL est vide : refaire l'étape 2"
 fi
 [ -n "$CLE" ] || CLE=$(grep -m1 -E '^(ssh|ecdsa|sk)-' ~/.ssh/authorized_keys 2>/dev/null)
 case "$CLE" in
@@ -127,7 +173,8 @@ grep -nE '^(domain|acme_email|admin_user):|^  - "(ssh|ecdsa|sk)-' group_vars/all
 ```
 
 Le contrôle doit afficher **quatre lignes** : `domain`, `acme_email`, `admin_user`
-et la clé. S'il en manque une, ou si un ÉCHEC est apparu, ne pas continuer.
+(qui vaut `sysadmin`) et la clé. S'il en manque une, ou si un ÉCHEC est apparu, ne
+pas continuer.
 
 **4. Jeton d'API Cloudflare** : saisi sans affichage et sans trace dans l'historique.
 
@@ -200,20 +247,59 @@ précèdent (garde-fous, paquets, création du compte) ont bien été simulées.
 ansible-playbook site.yml -K
 ```
 
-### Avant le premier passage : ne pas se couper l'accès
+À la fin du rôle `base`, un rappel indique que SSH n'est **pas encore verrouillé** :
+c'est normal, c'est l'objet des deux étapes suivantes.
 
-Le rôle `base` interdit la connexion SSH par mot de passe. Avant de le jouer :
+**9. Tester la connexion SSH par clé.** Depuis ton **poste** (un nouveau terminal),
+sans fermer la session de la machine :
 
-- vérifier que ta clé publique est dans `~/.ssh/authorized_keys` du compte
-  indiqué en `ansible_user` (sinon il ne restera que la console de Freebox OS) ;
+```bash
+ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 sysadmin@IP_DE_LA_MACHINE 'whoami; sudo -n true && echo sudo OK'
+```
+
+Attendu : `sysadmin`, puis `sudo OK`. `IdentitiesOnly` est nécessaire : sshd coupe
+après trois refus (`MaxAuthTries 3`), et un agent SSH qui propose plusieurs clés les
+épuise avant la bonne (`Too many authentication failures`). Pour ne plus y penser,
+mettre dans `~/.ssh/config` du poste un bloc `Host` avec `IdentityFile` et
+`IdentitiesOnly yes`. **Ne passe pas à l'étape 10 tant que ce test n'a pas réussi.**
+
+**10. Verrouiller SSH.** Seulement après l'étape 9 :
+
+```bash
+sed -i 's|^ssh_lockdown: .*|ssh_lockdown: true|' group_vars/all/main.yml
+grep -n '^ssh_lockdown:' group_vars/all/main.yml
+ansible-playbook site.yml -K --tags base
+```
+
+Le contrôle doit afficher `ssh_lockdown: true`. Le playbook interdit alors les mots
+de passe, n'autorise plus que `admin_user`, et verrouille son mot de passe. Depuis le
+poste, la connexion par mot de passe doit être refusée, et celle par clé (étape 9)
+doit marcher toujours :
+
+```bash
+ssh -o PubkeyAuthentication=no sysadmin@IP_DE_LA_MACHINE
+```
+
+Attendu : `Permission denied (publickey)`. Tant que l'étape 10 n'est pas faite, la
+ligne « Durcissement SSH » de la page d'état est rouge : c'est voulu.
+
+### Ne pas se couper l'accès
+
+Le verrouillage de SSH se fait en deux temps (étapes 9 et 10), et c'est ce qui
+empêche une clé fausse de vous enfermer dehors : rien n'est verrouillé avant que la
+connexion par clé ait été testée. Les garde-fous du rôle `base` refusent aussi, avant
+toute modification, une clé qui n'est pas une clé publique complète. En plus :
+
 - vérifier que le réseau depuis lequel tu te connectes est bien dans
   `admin_cidrs_v4` (`ip -4 addr` sur ton poste) ;
-- garder une session SSH ouverte pendant le premier passage, et en tester une
-  **nouvelle** avant de fermer l'ancienne.
+- garder une session ouverte pendant les passes, et en tester une **nouvelle** avant
+  de fermer l'ancienne ;
+- si SSH est mal réglé malgré tout, le secours est l'écran de la machine : connexion
+  en `root` avec le mot de passe testé à l'installation.
 
 `acme_staging: true` par défaut : le certificat vient de l'autorité de **test**
-de Let's Encrypt (avertissement navigateur, pas de limite de débit). Une fois la
-VM validée, passer à `false` et rejouer : le certificat est réémis en production.
+de Let's Encrypt (avertissement navigateur, pas de limite de débit). Une fois le
+déploiement validé, passer à `false` et rejouer : le certificat est réémis en production.
 
 ## Freebox et DNS
 
@@ -418,6 +504,11 @@ curl -skI https://inconnu.example.fr # connexion coupée sans réponse
   hors réseau d'admin, en-têtes de sécurité présents et `Server` absent,
   TLS 1.1 refusé, 429 au-delà de 100 requêtes / 10 s.
 - `nft -c` sur les règles générées ; générateur Quadlet en mode `-dryrun`.
+- Verrouillage SSH en deux temps : le fichier sshd rendu dans les deux états, lu par
+  `sshd -T` (mots de passe acceptés et aucune liste de comptes tant que
+  `ssh_lockdown` vaut `false` ; clé seule et `AllowUsers` ensuite) ; les garde-fous du
+  rôle `base` joués sur 14 jeux de valeurs ; les blocs des étapes 0 à 10 vérifiés
+  dans des copies jetables.
 
 **Déploiement réel sur une VM Debian 13.7** (ansible-core 2.19.11, Podman
 5.4.2), rôle par rôle puis en une seule passe :
@@ -482,8 +573,11 @@ version de CrowdSec. Un contrôle qui échoue s'affiche « inconnu » avec sa ca
 
 **Non vérifié** : un vrai renouvellement lancé par la minuterie de certbot (le
 renouvellement simulé et le hook réussissent, mais le hook n'a tourné que sur le
-certificat déjà en place, pas sur un certificat fraîchement émis), la reconstruction
-complète sur une machine neuve et le remplacement de la vraie base du club par un export,
+certificat déjà en place, pas sur un certificat fraîchement émis), le parcours des
+comptes de la section « Les comptes » (installation avec `sysadmin`, puis les deux
+temps SSH des étapes 9 et 10) sur une installation neuve : contrôlé sur des fichiers
+et dans un conteneur, pas encore de bout en bout sur la machine physique, la
+reconstruction complète sur une machine neuve et le remplacement de la vraie base du club par un export,
 la règle de pare-feu `backup_target_client_cidrs` (elle demande deux machines),
 l'élagage depuis la cible, la surveillance RAID et SMART (une VM n'expose pas de SMART)
 et la migration depuis Debian 12.

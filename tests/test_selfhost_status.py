@@ -144,9 +144,9 @@ class Parsing(unittest.TestCase):
         self.assertEqual(rows(chain("drop"), "table inet host_fw\n"), [st.OK, st.CRIT])   # bouncer muet
 
     def test_parse_sshd_config(self):
-        config = st.parse_sshd_config("passwordauthentication no\npermitrootlogin no\nallowusers jf freebox\n")
+        config = st.parse_sshd_config("passwordauthentication no\npermitrootlogin no\nallowusers sysadmin\n")
         self.assertEqual(config["passwordauthentication"], "no")
-        self.assertEqual(config["allowusers"], "jf freebox")
+        self.assertEqual(config["allowusers"], "sysadmin")
 
     def test_parse_openssl_cert_and_days(self):
         info = st.parse_openssl_cert("notAfter=Feb  1 12:00:00 2027 GMT\nissuer=C = US, O = (STAGING) Let's Encrypt, CN = (STAGING) Ersatz Edamame E1\n")

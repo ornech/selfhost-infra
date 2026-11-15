@@ -11,9 +11,18 @@ acme_email: admin@example.fr       # contact Let's Encrypt
 acme_staging: true
 
 # --- Administration --------------------------------------------------------
-admin_user: jf
+# Compte d'administration : un rôle, pas une personne (les personnes sont des
+# clés dans admin_ssh_pubkeys). C'est le compte que l'installateur Debian crée ;
+# le playbook le configure. Jamais root. Voir README, « Les comptes ».
+admin_user: sysadmin
 admin_ssh_pubkeys:
-  - "ssh-ed25519 AAAA...remplace-moi jf@poste"
+  - "ssh-ed25519 AAAA...remplace-moi admin@poste"
+# Verrouillage de SSH en deux temps (README, étapes 9 et 10).
+#   false : le compte et la clé sont posés, mais SSH accepte encore le mot de
+#           passe : une clé fausse ne peut pas vous enfermer dehors.
+#   true  : mots de passe interdits, seul admin_user peut se connecter, par clé.
+# Ne passer à true qu'après avoir testé la connexion par clé (étape 9).
+ssh_lockdown: false
 # Réseaux d'administration : LAN + plage du VPN WireGuard.
 # Servent à : SSH (nftables) et frontal privé :8443 (nftables + HAProxy).
 admin_cidrs_v4:

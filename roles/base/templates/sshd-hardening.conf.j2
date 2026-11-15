@@ -1,10 +1,9 @@
 # {{ ansible_managed }}
+# Verrouillage en deux temps (variable ssh_lockdown, README étapes 9 et 10) :
+# tant qu'elle vaut false, rien ci-dessous ne peut empêcher une connexion qui
+# marche aujourd'hui (ni mot de passe refusé, ni liste de comptes).
 PermitRootLogin no
-PasswordAuthentication no
-KbdInteractiveAuthentication no
 PubkeyAuthentication yes
-AuthenticationMethods publickey
-AllowUsers {{ admin_user }} {{ ansible_user | default('') }}
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding no
@@ -12,3 +11,10 @@ MaxAuthTries 3
 LoginGraceTime 20
 ClientAliveInterval 300
 ClientAliveCountMax 2
+{% if ssh_lockdown | bool %}
+# Verrouillage : clé uniquement, un seul compte.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+AllowUsers {{ admin_user }}
+{% endif %}
