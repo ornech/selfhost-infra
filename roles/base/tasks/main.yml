@@ -11,15 +11,42 @@
       Debian 12 fournit Podman 4.3 (sans Quadlet) et ansible-core 2.14. Voir README, "Prérequis".
     quiet: true
 
-- name: Garde-fou - aucune valeur d'exemple ne doit rester
+- name: Garde-fou - domaine et courriel renseignés, sans valeur d'exemple
   ansible.builtin.assert:
     that:
-      - domain != 'example.fr'
-      - acme_email is not search('example\\.fr$')
-      - admin_ssh_pubkeys | select('search', 'remplace-moi') | list | length == 0
+      - domain | default('', true) | length > 0
+      - acme_email | default('', true) | length > 0
+      # example.fr (valeur du dépôt) et mondomaine.fr (valeur d'exemple du README)
+      - domain is not search('(^|\\.)(example|mondomaine)\\.fr$')
+      - acme_email is not search('@(.*\\.)?(example|mondomaine)\\.fr$')
     fail_msg: >-
-      Valeurs d'exemple encore présentes dans group_vars/all/main.yml
-      (domain, acme_email ou admin_ssh_pubkeys). Les renseigner avant de déployer.
+      domain ou acme_email est vide ou garde une valeur d'exemple
+      (example.fr, mondomaine.fr) dans group_vars/all/main.yml.
+      Les renseigner avant de déployer.
+    quiet: true
+
+- name: Garde-fou - le compte d'administration n'est pas root
+  ansible.builtin.assert:
+    that:
+      - admin_user | default('', true) | length > 0
+      - admin_user != 'root'
+    fail_msg: >-
+      admin_user doit être un compte ordinaire que ce playbook crée (jamais root) :
+      il reçoit un mot de passe verrouillé et sshd refuse la connexion de root,
+      donc la machine ne serait plus joignable. Voir README, étape 2.
+    quiet: true
+
+- name: Garde-fou - clés SSH de l'administrateur
+  ansible.builtin.assert:
+    that:
+      - admin_ssh_pubkeys | default([], true) | length > 0
+      # Une clé publique complète : type, bloc base64, commentaire facultatif.
+      - admin_ssh_pubkeys | default([], true) | map('string') | reject('match', '^(ssh|ecdsa|sk)-[A-Za-z0-9@.-]+ [A-Za-z0-9+/]+=*( .*)?$') | list | length == 0
+    fail_msg: >-
+      admin_ssh_pubkeys est vide, ou contient autre chose qu'une clé publique SSH
+      complète (valeur d'exemple, chaîne vide, clé tronquée). Sans clé valable,
+      la connexion par mot de passe étant interdite, la machine ne serait plus
+      joignable. Voir README, étape 2.
     quiet: true
 
 - name: Paquets à jour

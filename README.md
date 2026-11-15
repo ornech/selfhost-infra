@@ -75,32 +75,59 @@ cd ~/selfhost-infra && git pull
 **1. Mot de passe du vault** (aléatoire, ignoré par Git, à sauvegarder hors du serveur)
 
 ```bash
-openssl rand -base64 32 > .vault_pass
-chmod 600 .vault_pass
+if [ -e .vault_pass ]; then
+  echo "DÉJÀ PRÉSENT : .vault_pass n'est pas écrasé (un nouveau mot de passe rendrait un vault existant illisible)"
+else
+  openssl rand -base64 32 > .vault_pass
+  chmod 600 .vault_pass
+fi
+ls -l .vault_pass
 ```
 
-**2. Tes valeurs** (adapter avant de coller)
+Le contrôle doit afficher un fichier de 45 octets, en `-rw-------`.
+
+**2. Tes valeurs** (à renseigner avant de coller : les lignes sont volontairement vides)
 
 ```bash
-DOMAINE=mondomaine.fr
-EMAIL=moi@mondomaine.fr
-ADMIN=jf
+DOMAINE=
+EMAIL=
+ADMIN=
+CLE=
 ```
+
+- `DOMAINE` : ton nom de domaine, celui de ta zone Cloudflare, sans `www`.
+- `EMAIL` : une adresse qui reçoit vraiment les courriers de Let's Encrypt.
+- `ADMIN` : le nom du compte d'administration, que **le playbook crée**.
+  **Jamais `root`** : ce compte reçoit un mot de passe verrouillé et sshd refuse
+  la connexion de root, la machine ne serait plus joignable.
+- `CLE` : la clé **publique** SSH de ton poste, sur une seule ligne et entre
+  apostrophes (`CLE='ssh-ed25519 AAAA… commentaire'`). Sur ton poste, `cat ~/.ssh/id_ed25519.pub`
+  l'affiche ; elle n'est pas secrète. Laisse `CLE=` vide seulement si tu es
+  connecté à cette machine par clé SSH : elle est alors lue dans `~/.ssh/authorized_keys`.
+
+Coller le bloc sans l'avoir rempli donne un ÉCHEC à l'étape suivante, pas un
+déploiement avec des valeurs d'exemple.
 
 **3. Report dans `group_vars/all/main.yml`**
 
 ```bash
-if [ -n "$DOMAINE" ] && [ -n "$EMAIL" ] && [ -n "$ADMIN" ]; then
+if [ -n "$DOMAINE" ] && [ -n "$EMAIL" ] && [ -n "$ADMIN" ] && [ "$ADMIN" != root ]; then
   sed -i "s|^domain: .*|domain: $DOMAINE|" group_vars/all/main.yml
   sed -i "s|^acme_email: .*|acme_email: $EMAIL|" group_vars/all/main.yml
   sed -i "s|^admin_user: .*|admin_user: $ADMIN|" group_vars/all/main.yml
 else
-  echo "ÉCHEC : DOMAINE, EMAIL ou ADMIN est vide : refaire l'étape 2"
+  echo "ÉCHEC : DOMAINE, EMAIL ou ADMIN est vide, ou ADMIN vaut root : refaire l'étape 2"
 fi
-CLE=$(grep -m1 '^ssh-' ~/.ssh/authorized_keys)
-sed -i "s|^  - \"ssh-ed25519 AAAA...remplace-moi jf@poste\"|  - \"$CLE\"|" group_vars/all/main.yml
-grep -nE '^(domain|acme_email|admin_user):|^  - "ssh' group_vars/all/main.yml
+[ -n "$CLE" ] || CLE=$(grep -m1 -E '^(ssh|ecdsa|sk)-' ~/.ssh/authorized_keys 2>/dev/null)
+case "$CLE" in
+  ssh-*|ecdsa-*|sk-*) sed -i '/^admin_ssh_pubkeys:/{n;s|.*|  - "'"$CLE"'"|}' group_vars/all/main.yml ;;
+  *) echo "ÉCHEC : aucune clé publique trouvée : la renseigner dans CLE (étape 2)" ;;
+esac
+grep -nE '^(domain|acme_email|admin_user):|^  - "(ssh|ecdsa|sk)-' group_vars/all/main.yml
 ```
+
+Le contrôle doit afficher **quatre lignes** : `domain`, `acme_email`, `admin_user`
+et la clé. S'il en manque une, ou si un ÉCHEC est apparu, ne pas continuer.
 
 **4. Jeton d'API Cloudflare** : saisi sans affichage et sans trace dans l'historique.
 
@@ -119,7 +146,11 @@ echo "longueur : ${#CF_TOKEN}"
 **5. Création et chiffrement du vault**
 
 ```bash
-if [ -n "$CF_TOKEN" ]; then
+if [ ! -s .vault_pass ]; then
+  echo "ÉCHEC : .vault_pass absent ou vide : refaire l'étape 1, le vault n'est pas modifié"
+elif [ -z "$CF_TOKEN" ]; then
+  echo "ÉCHEC : jeton vide, le vault n'est pas modifié"
+else
 cat > group_vars/all/vault.yml <<FIN
 ---
 vault_certbot_dns_credentials: |
@@ -127,15 +158,14 @@ vault_certbot_dns_credentials: |
 vault_app_secrets: {}
 FIN
 chmod 600 group_vars/all/vault.yml
-ansible-vault encrypt group_vars/all/vault.yml
-else
-  echo "ÉCHEC : jeton vide, le vault n'est pas modifié"
+ansible-vault encrypt group_vars/all/vault.yml || { rm -f group_vars/all/vault.yml; echo "ÉCHEC : chiffrement impossible, le fichier en clair a été supprimé"; }
 fi
 unset CF_TOKEN
 head -1 group_vars/all/vault.yml
 ```
 
-La dernière ligne doit afficher `$ANSIBLE_VAULT;1.1;AES256`.
+La dernière ligne doit afficher `$ANSIBLE_VAULT;1.1;AES256`. Si elle affiche
+`---`, ou si un ÉCHEC est apparu, le jeton n'est pas chiffré : ne pas continuer.
 
 **6. Épinglage de l'image par empreinte**
 
