@@ -229,9 +229,13 @@ part ailleurs. L'exemple complet (Ghost + MySQL 8) est l'entrée `club` de
 `public_hosts` dans `group_vars/all/main.yml`. Ghost n'est supporté qu'avec MySQL 8,
 pas MariaDB.
 
-**1. Secrets** : à ajouter dans le vault (`ansible-vault edit group_vars/all/vault.yml`).
+**1. Secrets** : à mettre dans le vault (`ansible-vault edit group_vars/all/vault.yml`).
 Mots de passe aléatoires : `openssl rand -base64 32`. Le mot de passe de la boîte
 d'envoi s'y saisit directement, sans passer par un terminal partagé.
+**Remplacer** la ligne `vault_app_secrets: {}` écrite à l'étape 5 : ne pas ajouter un
+second bloc. Avec deux clés identiques, Ansible garde la dernière en émettant seulement un
+avertissement (`Found duplicate mapping key`) : si c'est le `{}`, les secrets du club sont
+ignorés sans autre signe.
 
 ```yaml
 vault_app_secrets:
@@ -275,8 +279,9 @@ une fois qu'il contient du contenu** (restaurer alors `club.sql`, ou lever le ve
 (cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user restart app-pub-club.service)
 ```
 
-**Reste à vérifier avant la production** : les droits du volume `club-content`, et une
-restauration réelle depuis `club.sql`.
+**Reste à vérifier avant la production** : les droits du volume `club-content`, et le
+remplacement de la vraie base par `club.sql` (l'export se recharge sans erreur dans une base
+temporaire, voir « Restaurer la base du club »).
 
 ## Page d'état
 
@@ -354,6 +359,9 @@ commandes ci-dessous servent à creuser.
 # Applications
 sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user status 'app-*'
 (cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) podman ps)
+# Sauvegardes (détail : section Sauvegardes)
+systemctl list-timers 'selfhost-backup*' --no-pager
+systemctl show selfhost-backup -p Result            # success : la dernière a réussi
 # Périmètre
 sudo cscli decisions list            # IP bannies
 sudo cscli metrics                   # lignes de journaux lues / parsées
@@ -396,7 +404,24 @@ curl -skI https://inconnu.example.fr # connexion coupée sans réponse
   d'admin, hôte inconnu coupé) ; CrowdSec avec le dépôt `any/any`, bouncer
   nftables qui applique puis retire une décision, lecture des journaux HAProxy
   et SSH.
-- `backup` : restic installé, « sauvegarde non configurée » affiché.
+- `backup` (dépôt local `/srv/backup/restic`, puis dépôt distant sur `rest-server`) :
+  - Déploiement, simulation `--check` sans erreur, rejeu à `changed=0`.
+  - Export MySQL lancé par systemd sous `NoNewPrivileges` ; `club.sql` produit ; le volume
+    `club-db` est bien exclu (0 fichier sauvegardé) et `club-content` sauvegardé.
+  - Minuterie de nuit déclenchée seule (03:22) ; sauvegardes incrémentales.
+  - Vérification hebdomadaire (`restic check`, 5 %) : `intègre` ; mauvais mot de passe refusé.
+  - Restauration dans un dossier à part : `club.sql`, `/etc/letsencrypt` et `club-content`
+    identiques (liens symboliques compris), mêmes propriétaires. `club.sql` rechargé dans une
+    base temporaire : 105 tables et mêmes comptes que la base réelle.
+  - Deux défauts trouvés et corrigés : la vérification échouait après 28 minutes sur un dépôt
+    local (`ProtectSystem=strict` rendait le dépôt non inscriptible), et restic n'avait aucun
+    cache sous systemd (`RESTIC_CACHE_DIR`).
+- `backup_target` (sur la même VM, en boucle locale) : le chemin du binaire était faux sur
+  Debian 13 (`/usr/bin/restic-rest-server`) ; déploiement puis rejeu à `changed=0` ; mode
+  ajout seul (suppression refusée par `403`, accès sans identifiants refusé par `401`) ;
+  port 8000 fermé depuis le réseau local.
+- Cible éteinte : la sauvegarde reprend seule si elle revient pendant l'attente ; sinon
+  échec après 14 min 39 s, puis sauvegarde locale normale et tâche en erreur.
 - Rejeu complet du playbook : `changed=0`.
 - Redémarrage de la VM : SSH durci, nftables, HAProxy, CrowdSec et les
   applications reviennent seuls. Les applications démarrent environ 1 min 30
@@ -420,10 +445,12 @@ avec `runuser`, `cscli` et `restic` ; nginx sans privilège avec `ReadOnly=true`
 et un dossier hôte monté ; le format JSON de `cscli bouncers list` selon la
 version de CrowdSec. Un contrôle qui échoue s'affiche « inconnu » avec sa cause.
 
-**Non vérifié** : le renouvellement automatique du certificat (hook compris),
-les sauvegardes restic et la cible `rest-server` (aucun dépôt configuré pendant
-les essais), la surveillance RAID et SMART (une VM n'expose pas de SMART) et la
-migration depuis Debian 12.
+**Non vérifié** : le hook de déploiement lancé par certbot au renouvellement (le
+renouvellement simulé `certbot renew --dry-run` réussit), la reconstruction complète
+sur une machine neuve et le remplacement de la vraie base du club par un export,
+la règle de pare-feu `backup_target_client_cidrs` (elle demande deux machines),
+l'élagage depuis la cible, la surveillance RAID et SMART (une VM n'expose pas de SMART)
+et la migration depuis Debian 12.
 
 ## Sauvegardes
 
@@ -438,6 +465,58 @@ Deux risques distincts, deux réponses distinctes :
 Le système n'est pas sauvegardé : le playbook le reconstruit. Seules les
 **données** le sont : volumes Podman, certificats, exports de bases.
 
+### Comment ça marche
+
+Chaque nuit, une minuterie systemd lance le script `selfhost-backup`, qui fait trois choses :
+
+1. **Exporter les bases.** Une base de données copiée « à chaud » est inutilisable. Les
+   commandes de `backup_pre_hooks` en écrivent donc un export cohérent (pour le club :
+   `/var/backups/selfhost/club.sql`).
+2. **Copier les données** dans chaque dépôt déclaré (`backup_repositories`) avec restic.
+   restic découpe les fichiers en morceaux, ne stocke que ce qui a changé depuis la
+   dernière fois (seule la première sauvegarde est complète) et **chiffre** tout avec la
+   clé `vault_restic_password`.
+3. **Noter le résultat** dans le journal : `-> <dépôt> : OK` ou `ÉCHEC`. Un dépôt en échec
+   n'empêche pas les autres d'être sauvegardés ; la tâche se termine alors en erreur.
+
+Chaque passage crée un **instantané** (snapshot) : l'état des fichiers à cet instant. On peut
+restaurer n'importe lequel. Une fois par semaine, un second script (`selfhost-backup-check`)
+vérifie que les dépôts ne sont pas corrompus, en relisant 5 % des données.
+
+### Où tout est configuré
+
+| Quoi | Où | Détail |
+|---|---|---|
+| Où envoyer les sauvegardes | `backup_repositories`, dans `group_vars/all/main.yml` | Liste de dépôts, chacun avec un nom et une adresse. Une adresse qui commence par `/` est un **dossier de cette machine** ; `rest:http://…` désigne un serveur distant |
+| Ce qui est sauvegardé | `backup_paths` (valeur par défaut dans `roles/backup/defaults/main.yml`) | Volumes Podman de `stack`, `/etc/letsencrypt`, `/var/backups/selfhost` |
+| Ce qui est exclu | `backup_excludes` | Par exemple le volume MySQL du club, remplacé par son export |
+| Exports avant la copie | `backup_pre_hooks` | Commandes lancées en root avant chaque sauvegarde |
+| Heures | `backup_schedule`, `backup_check_schedule` | Sauvegarde à 03:15 plus 0 à 15 minutes au hasard ; vérification le dimanche à 05:00 |
+| Clé de chiffrement | `vault_restic_password`, dans le vault | Écrite sur le serveur dans `/etc/selfhost-backup/password` |
+
+Ce que le playbook installe sur le serveur sauvegardé :
+
+```
+/etc/selfhost-backup/password        clé de chiffrement (0600, root)
+/etc/selfhost-backup/repos/<nom>     adresse de chaque dépôt (0600 : elle peut contenir un mot de passe)
+/etc/selfhost-backup/excludes        exclusions
+/usr/local/sbin/selfhost-backup      script de sauvegarde
+/usr/local/sbin/selfhost-backup-check   script de vérification
+/etc/systemd/system/selfhost-backup{,-check}.{service,timer}
+/var/backups/selfhost/               exports de bases (0700)
+/root/.cache/restic/                 cache de restic
+```
+
+**Le dossier de sauvegarde lui-même** est l'adresse du dépôt : par exemple
+`/srv/backup/restic` pour un dépôt local, ou `/srv/restic/<compte>/` sur la machine
+cible (`backup_target_data_dir`). Ce n'est pas un dossier de copies lisibles : restic y
+range des morceaux chiffrés (`data/`, `index/`, `snapshots/`…). On ne le consulte qu'avec la
+commande `restic`, voir plus bas.
+
+Un dépôt placé sur le **même disque** que les données ne protège pas d'une panne de disque :
+il sert à revenir en arrière après une erreur. La copie qui compte est celle de la machine
+distante.
+
 ### Principe de la copie hors site : ajout seul
 
 La machine qui reçoit les sauvegardes fait tourner rest-server en mode
@@ -445,6 +524,9 @@ La machine qui reçoit les sauvegardes fait tourner rest-server en mode
 en supprimer ni en modifier. Un attaquant qui prendrait le serveur ne pourrait
 donc pas détruire l'historique. Conséquence : l'élagage des anciennes
 sauvegardes se fait **à la main, depuis la machine cible**.
+
+Vérifié : depuis le serveur sauvegardé, `restic forget` reçoit `403 Forbidden` et le nombre
+d'instantanés ne baisse pas ; un accès sans identifiants reçoit `401`.
 
 ### Mise en place
 
@@ -454,7 +536,9 @@ sauvegardes se fait **à la main, depuis la machine cible**.
 ansible-vault edit group_vars/all/vault.yml
 ```
 
-Lignes à ajouter (générer les deux mots de passe avec `openssl rand -base64 32`) :
+Lignes à ajouter. La clé restic se génère avec `openssl rand -base64 32`. Le mot de passe du
+compte rest-server se génère avec `openssl rand -hex 24` : il est inséré dans l'adresse du
+dépôt (`rest:http://compte:mot-de-passe@…`), où un `/` du format base64 casserait l'adresse.
 
 ```yaml
 vault_restic_password: "..."          # clé de chiffrement : la conserver AUSSI hors du serveur
@@ -463,7 +547,8 @@ vault_backup_rest_password: "..."
 ```
 
 Sans `vault_restic_password`, **aucune restauration n'est possible**. Le garder
-dans un gestionnaire de mots de passe ou sur papier, ailleurs que sur le serveur.
+dans un gestionnaire de mots de passe ou sur papier, ailleurs que sur le serveur
+(voir « Ce qu'il faut garder hors du serveur »).
 
 **2. Machine cible** (chez un proche, ou second serveur), joignable par le tunnel
 WireGuard : la déclarer dans `inventory/hosts.yml`, groupe `backup_targets`, puis :
@@ -472,6 +557,29 @@ WireGuard : la déclarer dans `inventory/hosts.yml`, groupe `backup_targets`, pu
 ansible-playbook backup-target.yml -K
 ```
 
+À lancer **vers la machine cible uniquement**. Ce playbook applique aussi le socle (`base`)
+avec les ports 80 et 443 fermés : sur le serveur principal, il couperait l'accès au site.
+Pour l'essayer sans seconde machine, limiter aux tâches du rôle et viser la machine
+elle-même par un inventaire temporaire (c'est ainsi qu'il a été testé) :
+
+```bash
+cat > ~/inv-cible.yml <<'FIN'
+all:
+  children:
+    backup_targets:
+      hosts:
+        vm-cible:
+          ansible_connection: local
+FIN
+ansible-playbook -i ~/inv-cible.yml backup-target.yml -K --tags backup_target
+```
+
+Sur Debian 13, le paquet `restic-rest-server` installe `/usr/bin/restic-rest-server`
+(`backup_target_bin`). Le pare-feu de la cible n'ouvre le port 8000 qu'aux adresses de
+`backup_target_client_cidrs` (vide par défaut : personne). Vérifié avec la liste vide : le
+port est fermé depuis le réseau local. L'ouverture à une adresse listée n'a pas été
+essayée : elle demande deux machines.
+
 **3. Dépôts** : dans `group_vars/all/main.yml`, renseigner `backup_repositories`
 (exemple commenté dans `roles/backup/defaults/main.yml`), puis :
 
@@ -479,75 +587,188 @@ ansible-playbook backup-target.yml -K
 ansible-playbook site.yml -K --tags backup
 ```
 
-### Contrôles
+**Piège** : `group_vars/all/` charge **tous** ses fichiers par ordre alphabétique, et le
+dernier qui définit une variable l'emporte, sans message. Ne pas mettre `backup_repositories`
+(ni aucune variable non secrète) dans le vault. Pour voir ce qu'Ansible retient réellement
+(les noms seulement, jamais les adresses qui contiennent un mot de passe) :
 
 ```bash
-systemctl list-timers 'selfhost-backup*'
-sudo journalctl -u selfhost-backup -n 30
-sudo journalctl -u selfhost-backup-check -n 30
+ansible <hôte> -m debug -a 'msg={{ backup_repositories | map(attribute="name") | list }}'
 ```
 
-Lancer une sauvegarde immédiatement :
+### Vérifier l'état des sauvegardes
+
+Un raccourci pour la session : restic avec la clé du serveur, sur le dépôt de votre choix
+(`local`, `distant`… : le nom donné dans `backup_repositories`) :
+
+```bash
+rr() { sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/"$1" restic "${@:2}"; }
+```
+
+Les contrôles :
+
+```bash
+systemctl list-timers 'selfhost-backup*' --no-pager      # prochaine exécution, dernière exécution
+systemctl show selfhost-backup -p Result,ExecMainStatus  # Result=success : la dernière a réussi
+sudo journalctl -u selfhost-backup -n 30 --no-pager      # détail : une ligne « -> <dépôt> : OK » par dépôt
+rr local snapshots                                       # liste des instantanés (date de chacun)
+sudo du -sh /srv/backup/restic                           # place prise par un dépôt local
+sudo journalctl -u selfhost-backup-check -n 30 --no-pager   # vérification hebdomadaire
+```
+
+Comment lire :
+
+- Tout va bien : `Result=success`, une ligne `OK` par dépôt, un instantané de moins de 24 h.
+- `ÉCHEC` : lire les lignes `Fatal:` juste au-dessus dans le journal (cible injoignable,
+  mauvais mot de passe, disque plein).
+- Aucun instantané récent : la minuterie n'a pas tourné (machine éteinte, unité arrêtée).
+- Vérification hebdomadaire : `-> <dépôt> : intègre`, ou `PROBLÈME`.
+
+Lancer une sauvegarde immédiatement (attend la fin) :
 
 ```bash
 sudo systemctl start selfhost-backup
 ```
 
+### Quand la cible est hors service
+
+Si la machine distante ne répond pas (panne, tunnel coupé), restic réessaie plusieurs
+minutes avant d'abandonner : **14 min 39 s mesurées**. Les dépôts sont traités dans l'ordre
+alphabétique de leur nom ; un dépôt distant nommé avant un dépôt local retarde donc d'autant
+la sauvegarde locale, qui est faite ensuite normalement. La tâche finit en erreur
+(`Result=exit-code`). Si la cible revient pendant l'attente, la sauvegarde reprend seule
+(mesuré : 7 min 24 s d'attente, puis `OK`).
+
 ### Restaurer un fichier ou un dossier
 
-Lister les sauvegardes du dépôt distant :
+Restaurer toujours **dans un dossier à part**, regarder, puis copier ce qu'il faut. Lister
+les instantanés, puis restaurer le dernier (ou un identifiant précis) :
 
 ```bash
-sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic snapshots
-```
-
-Restaurer la dernière sauvegarde dans un dossier à part, sans rien écraser :
-
-```bash
-sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic restore latest --target /root/restauration
+rr distant snapshots
+rr distant restore latest --target /root/restauration
 sudo ls -R /root/restauration | head -50
 ```
+
+Pour ne restaurer qu'une partie : `--include /chemin/absolu`. **Supprimer ensuite le
+dossier** (`sudo rm -rf /root/restauration`) : il contient les clés privées des certificats
+et la base du club, en clair.
+
+### Restaurer la base du club
+
+L'export `club.sql` est dans `/var/backups/selfhost/` (et dans chaque instantané). Un
+raccourci pour lancer `mysql` dans le conteneur de la base :
+
+```bash
+my() { (cd / && sudo runuser -u stack -- env XDG_RUNTIME_DIR=/run/user/$(id -u stack) podman exec -i app-pub-club-db sh -c 'mysql -uroot -p"$(cat /run/secrets/club_db_root_password)" "$@"' sh "$@"); }
+```
+
+**Vérifier qu'un export est lisible, sans toucher au site** : le charger dans une base
+temporaire, comparer, la supprimer (vérifié : 105 tables, mêmes comptes que la base réelle).
+
+```bash
+sudo grep -cE 'GTID_PURGED|CREATE DATABASE|^USE ' /var/backups/selfhost/club.sql   # attendu : 0
+sudo -v
+my -e "CREATE DATABASE ghost_test"
+sudo cat /var/backups/selfhost/club.sql | my ghost_test
+my -e "SELECT table_schema, COUNT(*) FROM information_schema.tables WHERE table_schema IN ('ghost','ghost_test') GROUP BY table_schema"
+my -e "DROP DATABASE ghost_test"
+```
+
+**Remplacer la vraie base** par l'export (perte de tout ce qui a été écrit depuis l'export).
+Arrêter Ghost sans arrêter la base, recréer la base vide, charger, redémarrer :
+
+```bash
+(cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user stop app-pub-club.service)
+my -e "DROP DATABASE ghost; CREATE DATABASE ghost"
+sudo cat /var/backups/selfhost/club.sql | my ghost
+(cd / && sudo -u stack XDG_RUNTIME_DIR=/run/user/$(id -u stack) systemctl --user start app-pub-club.service)
+```
+
+Cette séquence n'a pas encore été rejouée sur la vraie base ; chacune de ses commandes
+l'a été séparément, sauf `DROP DATABASE ghost` suivi du chargement.
 
 ### Test de restauration mensuel
 
 Une sauvegarde jamais restaurée n'est qu'un espoir. Une fois par mois :
 
 ```bash
-sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic restore latest --target /root/test-restauration
+rr distant restore latest --target /root/test-restauration
 sudo du -sh /root/test-restauration
 sudo rm -rf /root/test-restauration
 ```
 
 ### Reconstruction complète sur une nouvelle machine
 
-1. Installer Debian 13 (RAID 1 au partitionnement si deux disques).
-2. Cloner ce dépôt, restaurer `.vault_pass`, puis `ansible-playbook site.yml -K`.
-3. Arrêter les applications :
+Cas : le serveur est perdu, il faut tout remonter ailleurs. Ce qu'il faut avoir **hors du
+serveur** est listé plus bas ; sans cela, les sauvegardes ne peuvent pas être lues.
 
-```bash
-sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 systemctl --user stop 'app-*'
-```
+1. Installer Debian 13 (RAID 1 au partitionnement si deux disques), puis suivre « Mise en
+   route » : cloner ce dépôt, remettre `.vault_pass`, `group_vars/all/vault.yml`,
+   `group_vars/all/main.yml` et `inventory/hosts.yml` (les copies gardées hors du serveur).
+   Les dépôts et la clé restic doivent être **les mêmes** qu'avant : c'est ce qui permet de
+   relire les anciennes sauvegardes.
+2. `ansible-playbook site.yml -K` : le système est reconstruit, les applications démarrent
+   **vides**. Si le dépôt existe et que la clé est bonne, le playbook ne l'initialise pas
+   (vérifié au rejeu).
+3. Arrêter la minuterie, pour qu'aucune sauvegarde du site vide ne devienne « le dernier
+   instantané » :
 
-4. Restaurer les volumes à leur place :
+   ```bash
+   sudo systemctl stop selfhost-backup.timer
+   ```
 
-```bash
-sudo env RESTIC_PASSWORD_FILE=/etc/selfhost-backup/password RESTIC_REPOSITORY_FILE=/etc/selfhost-backup/repos/distant restic restore latest --target / --include /home/stack/.local/share/containers/storage/volumes
-```
+4. Repérer l'instantané voulu (colonne `Host` = l'ancienne machine), noter son identifiant :
 
-5. Redémarrer les applications :
+   ```bash
+   rr distant snapshots
+   ```
 
-```bash
-sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 systemctl --user start 'app-*'
-```
+5. Arrêter les applications concernées, puis restaurer les volumes et les exports :
+
+   ```bash
+   sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 systemctl --user stop 'app-*'
+   rr distant restore <identifiant> --target / --include /home/stack/.local/share/containers/storage/volumes --include /var/backups/selfhost
+   ```
+
+   Le volume de la base du club (`club-db`) revient **vide** : il est exclu de la sauvegarde
+   au profit de l'export `club.sql`.
+6. Redémarrer les applications, puis recharger la base depuis `/var/backups/selfhost/club.sql`
+   (section « Restaurer la base du club ») :
+
+   ```bash
+   sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 systemctl --user start 'app-*'
+   ```
+
+7. Contrôler le site, puis relancer la minuterie : `sudo systemctl start selfhost-backup.timer`.
 
 L'utilisateur `stack` a un identifiant fixe (1500) : les fichiers restaurés
-retrouvent leurs propriétaires. Les sous-identifiants des conteneurs
-(`/etc/subuid`) dépendent de l'ordre de création des comptes ; si une
-application ne lit plus ses fichiers, remettre les droits depuis le conteneur :
+retrouvent leurs propriétaires (vérifié : même propriétaire avant et après pour le volume
+du club). Les sous-identifiants des conteneurs (`/etc/subuid`) dépendent de l'ordre de
+création des comptes ; si une application ne lit plus ses fichiers, remettre les droits
+depuis le conteneur :
 
 ```bash
 sudo -u stack XDG_RUNTIME_DIR=/run/user/1500 podman unshare chown -R 0:0 /home/stack/.local/share/containers/storage/volumes/<volume>/_data
 ```
+
+**Non rejoué de bout en bout** : les étapes ont été vérifiées séparément (restauration dans un
+dossier, rechargement de l'export dans une base temporaire), pas la séquence complète sur une
+machine neuve.
+
+### Ce qu'il faut garder hors du serveur
+
+Si le serveur disparaît, il emporte avec lui tout ce qui n'est pas dans Git. À conserver
+ailleurs, **dans au moins deux endroits dont un hors de chez vous** :
+
+1. `.vault_pass` : sans lui le vault est illisible.
+2. Une copie de `group_vars/all/vault.yml` (chiffré) : il contient la clé restic, l'adresse
+   et le compte de la machine distante, les secrets des applications.
+3. La clé restic **seule**, à part : sans elle, les sauvegardes sont des données chiffrées
+   sans recours possible.
+4. Une copie de `group_vars/all/main.yml` et de `inventory/hosts.yml` tels qu'ils sont sur
+   le serveur : le domaine, le courriel et la clé SSH y sont des modifications locales,
+   absentes de Git.
 
 ### Élagage (sur la machine cible, à la main)
 
