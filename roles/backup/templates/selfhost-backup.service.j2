@@ -6,6 +6,8 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# Sous systemd, ni $HOME ni $XDG_CACHE_HOME : sans ceci restic n'a aucun cache.
+Environment=RESTIC_CACHE_DIR=/root/.cache/restic
 ExecStart=/usr/local/sbin/selfhost-backup
 Nice=10
 IOSchedulingClass=idle

@@ -6,10 +6,14 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# Sous systemd, ni $HOME ni $XDG_CACHE_HOME : sans ceci restic n'a aucun cache.
+Environment=RESTIC_CACHE_DIR=/root/.cache/restic
 ExecStart=/usr/local/sbin/selfhost-backup-check
 Nice=10
 IOSchedulingClass=idle
 ProtectSystem=strict
-ReadWritePaths=/root/.cache/restic
+# restic check pose un verrou dans le dépôt : un dépôt local (url = chemin
+# absolu) doit être inscriptible, sinon la vérification échoue après 28 min.
+ReadWritePaths={{ (['/root/.cache/restic'] + (backup_repositories | map(attribute='url') | select('match', '^/') | list)) | join(' ') }}
 PrivateTmp=true
 NoNewPrivileges=true
