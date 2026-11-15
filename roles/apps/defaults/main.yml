@@ -17,3 +17,19 @@ apps_image_keys: >-
       + (apps_sidecars | map(attribute='1.image') | list)) | unique | list }}
 
 apps_secrets: "{{ vault_app_secrets | default({}) | dict2items(key_name='name', value_name='value') }}"
+
+# Noms des secrets que les applications et leurs annexes réclament (`secrets:`,
+# sous forme de nom seul ou de couple {name, env}). Sert au garde-fou de début de rôle.
+apps_required_secrets: >-
+  {%- set ns = namespace(names=[]) -%}
+  {%- for unit in apps_units -%}
+  {%- for s in (unit.secrets | default([])) -%}
+  {%- set ns.names = ns.names + [s.name if s is mapping else s] -%}
+  {%- endfor -%}
+  {%- for sidecar in (unit.sidecars | default([])) -%}
+  {%- for s in (sidecar.secrets | default([])) -%}
+  {%- set ns.names = ns.names + [s.name if s is mapping else s] -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {%- endfor -%}
+  {{ ns.names | unique | list }}

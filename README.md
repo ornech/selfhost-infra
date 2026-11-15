@@ -147,10 +147,12 @@ CLE=
 
 - `DOMAINE` : ton nom de domaine, celui de ta zone Cloudflare, sans `www`.
 - `EMAIL` : une adresse qui reçoit vraiment les courriers de Let's Encrypt.
-- `CLE` : la clé **publique** SSH de ton poste, sur une seule ligne et entre
-  apostrophes (`CLE='ssh-ed25519 AAAA… commentaire'`). Sur ton poste, `cat ~/.ssh/id_ed25519.pub`
-  l'affiche ; elle n'est pas secrète. Laisse `CLE=` vide seulement si tu es
-  connecté à cette machine par clé SSH : elle est alors lue dans `~/.ssh/authorized_keys`.
+- `CLE` : la clé **publique** SSH de ton **poste** (pas du serveur), sur une seule
+  ligne et entre apostrophes. Sur ton poste, `cat ~/.ssh/id_ed25519.pub` l'affiche ;
+  elle n'est pas secrète. Si tu n'en as pas, crée-la d'abord, avec une phrase de
+  passe : `ssh-keygen -t ed25519 -C "$(whoami)@$(hostname)"`. Laisse `CLE=` vide
+  seulement si tu es connecté à cette machine par clé SSH : elle est alors lue dans
+  `~/.ssh/authorized_keys`.
 
 Coller le bloc sans l'avoir rempli donne un ÉCHEC à l'étape suivante, pas un
 déploiement avec des valeurs d'exemple.
@@ -165,54 +167,85 @@ else
   echo "ÉCHEC : DOMAINE ou EMAIL est vide : refaire l'étape 2"
 fi
 [ -n "$CLE" ] || CLE=$(grep -m1 -E '^(ssh|ecdsa|sk)-' ~/.ssh/authorized_keys 2>/dev/null)
-case "$CLE" in
-  ssh-*|ecdsa-*|sk-*) sed -i '/^admin_ssh_pubkeys:/{n;s|.*|  - "'"$CLE"'"|}' group_vars/all/main.yml ;;
-  *) echo "ÉCHEC : aucune clé publique trouvée : la renseigner dans CLE (étape 2)" ;;
-esac
+if printf '%s\n' "$CLE" | ssh-keygen -lf - >/dev/null 2>&1; then
+  sed -i '/^admin_ssh_pubkeys:/{n;s|.*|  - "'"$CLE"'"|}' group_vars/all/main.yml
+  printf '%s\n' "$CLE" | ssh-keygen -lf -
+else
+  echo "ÉCHEC : aucune clé publique complète : la renseigner dans CLE (étape 2)"
+fi
 grep -nE '^(domain|acme_email|admin_user):|^  - "(ssh|ecdsa|sk)-' group_vars/all/main.yml
 ```
 
-Le contrôle doit afficher **quatre lignes** : `domain`, `acme_email`, `admin_user`
-(qui vaut `sysadmin`) et la clé. S'il en manque une, ou si un ÉCHEC est apparu, ne
-pas continuer.
+Le contrôle affiche d'abord l'**empreinte** de la clé (`SHA256:…`) : elle doit être
+identique à celle de ton poste (`ssh-keygen -lf ~/.ssh/id_ed25519.pub`). Puis
+**quatre lignes** : `domain`, `acme_email`, `admin_user` (qui vaut `sysadmin`) et la
+clé. S'il en manque une, ou si un ÉCHEC est apparu, ne pas continuer. La ligne
+d'exemple `AAAA…` n'est pas une clé : elle est refusée.
 
-**4. Jeton d'API Cloudflare** : saisi sans affichage et sans trace dans l'historique.
+**4. Deux secrets à saisir** : sans affichage et sans trace dans l'historique. Le jeton
+d'API Cloudflare, puis le mot de passe de la boîte `noreply@` de ton domaine (le site
+du club, publié par la configuration d'exemple, s'en sert pour envoyer ses courriels).
+**Un bloc à la fois** : un second `read` collé avec le premier lirait la ligne suivante
+comme valeur.
 
 ```bash
 read -rsp "Jeton Cloudflare : " CF_TOKEN; echo
 ```
 
-La commande attend ta saisie : colle le jeton à l'invite, puis Entrée (rien ne
-s'affiche). Le dernier mot, `CF_TOKEN`, est le **nom** de la variable, pas la
-valeur. Contrôle que la longueur n'est pas nulle (53 pour un jeton `cfut_…`) :
+Colle le jeton à l'invite, puis Entrée (rien ne s'affiche). Le dernier mot,
+`CF_TOKEN`, est le **nom** de la variable, pas la valeur. Puis :
 
 ```bash
-echo "longueur : ${#CF_TOKEN}"
+read -rsp "Mot de passe de la boîte noreply@ (SMTP) : " SMTP; echo
 ```
 
-**5. Création et chiffrement du vault**
+Contrôle que les deux longueurs ne sont pas nulles (53 pour un jeton `cfut_…`) :
 
 ```bash
+echo "jeton : ${#CF_TOKEN} caractères ; mot de passe SMTP : ${#SMTP} caractères"
+```
+
+**5. Création et chiffrement du vault.** Le fichier est chiffré **au moment où il est
+écrit** : le jeton et les mots de passe ne sont jamais en clair sur le disque. Les deux
+mots de passe de la base du club sont générés ici et ne s'affichent pas. **Cette étape
+ne se rejoue pas** : si `vault.yml` existe, elle refuse de l'écraser (il contient des
+secrets déjà utilisés par les applications).
+
+```bash
+Q="'"
 if [ ! -s .vault_pass ]; then
-  echo "ÉCHEC : .vault_pass absent ou vide : refaire l'étape 1, le vault n'est pas modifié"
-elif [ -z "$CF_TOKEN" ]; then
-  echo "ÉCHEC : jeton vide, le vault n'est pas modifié"
+  echo "ÉCHEC : .vault_pass absent ou vide : refaire l'étape 1, le vault n'est pas créé"
+elif [ -e group_vars/all/vault.yml ]; then
+  echo "ÉCHEC : group_vars/all/vault.yml existe déjà : il n'est pas écrasé (il contient des secrets déjà utilisés)"
+elif [ -z "$CF_TOKEN" ] || [ -z "$SMTP" ]; then
+  echo "ÉCHEC : jeton ou mot de passe SMTP vide, le vault n'est pas créé"
 else
-cat > group_vars/all/vault.yml <<FIN
----
-vault_certbot_dns_credentials: |
-  dns_cloudflare_api_token = $CF_TOKEN
-vault_app_secrets: {}
-FIN
-chmod 600 group_vars/all/vault.yml
-ansible-vault encrypt group_vars/all/vault.yml || { rm -f group_vars/all/vault.yml; echo "ÉCHEC : chiffrement impossible, le fichier en clair a été supprimé"; }
+  {
+    echo '---'
+    echo 'vault_certbot_dns_credentials: |'
+    printf '  dns_cloudflare_api_token = %s\n' "$CF_TOKEN"
+    echo 'vault_app_secrets:'
+    printf '  club_db_password: "%s"\n' "$(openssl rand -hex 24)"
+    printf '  club_db_root_password: "%s"\n' "$(openssl rand -hex 24)"
+    printf "  club_smtp_password: '%s'\n" "${SMTP//$Q/$Q$Q}"
+  } | ansible-vault encrypt --output group_vars/all/vault.yml - >/dev/null \
+    && chmod 600 group_vars/all/vault.yml \
+    || echo "ÉCHEC : le vault n'est pas créé"
 fi
-unset CF_TOKEN
+unset CF_TOKEN SMTP Q
 head -1 group_vars/all/vault.yml
 ```
 
-La dernière ligne doit afficher `$ANSIBLE_VAULT;1.1;AES256`. Si elle affiche
-`---`, ou si un ÉCHEC est apparu, le jeton n'est pas chiffré : ne pas continuer.
+La dernière ligne doit afficher `$ANSIBLE_VAULT;1.1;AES256`. Si elle affiche autre
+chose, ou si un ÉCHEC est apparu, le vault n'existe pas : ne pas continuer. Pour
+vérifier **les noms** des secrets sans jamais voir leurs valeurs :
+
+```bash
+ansible-vault view group_vars/all/vault.yml | grep -E '^(vault_app_secrets|  [a-z_]+):' | cut -d: -f1
+```
+
+Il doit lister `vault_app_secrets`, puis `club_db_password`, `club_db_root_password`
+et `club_smtp_password`.
 
 **6. Épinglage de l'image par empreinte**
 
@@ -345,20 +378,26 @@ part ailleurs. L'exemple complet (Ghost + MySQL 8) est l'entrée `club` de
 `public_hosts` dans `group_vars/all/main.yml`. Ghost n'est supporté qu'avec MySQL 8,
 pas MariaDB.
 
-**1. Secrets** : à mettre dans le vault (`ansible-vault edit group_vars/all/vault.yml`).
-Mots de passe aléatoires : `openssl rand -base64 32`. Le mot de passe de la boîte
-d'envoi s'y saisit directement, sans passer par un terminal partagé.
-**Remplacer** la ligne `vault_app_secrets: {}` écrite à l'étape 5 : ne pas ajouter un
-second bloc. Avec deux clés identiques, Ansible garde la dernière en émettant seulement un
-avertissement (`Found duplicate mapping key`) : si c'est le `{}`, les secrets du club sont
-ignorés sans autre signe.
+**1. Secrets** : les trois secrets du club (`club_db_password`, `club_db_root_password`,
+`club_smtp_password`) sont **créés à l'étape 5** de la mise en route. Pour une autre
+application qui déclare `secrets:`, ajouter ses noms sous la clé **existante**
+`vault_app_secrets`, avec `ansible-vault edit group_vars/all/vault.yml` (mots de passe
+aléatoires : `openssl rand -hex 24`) :
 
 ```yaml
 vault_app_secrets:
-  club_db_password: "..."
-  club_db_root_password: "..."
-  club_smtp_password: "..."          # mot de passe de noreply@ (SMTP)
+  club_db_password: "..."            # déjà là
+  club_db_root_password: "..."       # déjà là
+  club_smtp_password: "..."          # déjà là : mot de passe de noreply@ (SMTP)
+  app_db_password: "..."             # nouveau
 ```
+
+Ne jamais écrire une **seconde** clé `vault_app_secrets` : avec deux clés identiques,
+Ansible garde la dernière en émettant seulement un avertissement
+(`Found duplicate mapping key`), et les secrets de la première sont ignorés sans autre
+signe. Le playbook **refuse de démarrer** si une application réclame un secret absent de
+`vault_app_secrets` : le message liste les noms manquants. Pour ne pas publier le club,
+retirer l'entrée `club` de `public_hosts` dans `group_vars/all/main.yml`.
 
 **2. Images** : `ghost` et `mysql` sont déjà épinglées par empreinte dans `images:`.
 Pour les mettre à jour, changer le tag puis relancer `scripts/pin-digests.sh`.
@@ -555,6 +594,23 @@ curl -skI https://inconnu.example.fr # connexion coupée sans réponse
   503 pendant ce délai.
 - Test depuis la 4G, par les redirections 80 et 443 de la Freebox.
 
+**Déploiement réel sur une machine physique x86** (Debian 13, Freebox directe), en
+suivant ce README :
+
+- Playbook complet à `failed=0`, puis rejeu complet sous `sysadmin` à `changed=0` ;
+  `club` et `www` répondent `200` depuis le LAN avec le certificat de test.
+- SSH : connexion par clé et `sudo` sans mot de passe sous `sysadmin` ; après le
+  verrouillage (étape 10), un mot de passe est refusé (`Permission denied (publickey)`)
+  et la clé marche toujours.
+- Les essais ont fait corriger six défauts : `admin_user` valant `root`, clé SSH vide,
+  valeurs d'exemple collées telles quelles, vault laissé en clair, secrets du club
+  absents du vault, et un compte `ansible_user` hérité de l'ancienne VM dans
+  `AllowUsers`. Chacun est désormais refusé par un garde-fou ou évité par le README.
+- **Redirection de la Freebox vers cette machine avec le certificat de test :
+  Brave affiche `ERR_CERT_AUTHORITY_INVALID` et, à cause de HSTS, sans possibilité
+  de passer outre.** Ne rediriger les ports 80 et 443 vers une machine qu'avec un
+  certificat de production et le contenu du site déjà restauré.
+
 CrowdSec ignore les adresses privées : les requêtes du LAN ne déclenchent pas de
 bannissement. Pour tester le blocage dans le noyau, utiliser une adresse de
 documentation : `sudo cscli decisions add --ip 192.0.2.99 --duration 5m`, puis
@@ -574,12 +630,14 @@ version de CrowdSec. Un contrôle qui échoue s'affiche « inconnu » avec sa ca
 **Non vérifié** : un vrai renouvellement lancé par la minuterie de certbot (le
 renouvellement simulé et le hook réussissent, mais le hook n'a tourné que sur le
 certificat déjà en place, pas sur un certificat fraîchement émis), le parcours des
-comptes de la section « Les comptes » (installation avec `sysadmin`, puis les deux
-temps SSH des étapes 9 et 10) sur une installation neuve : contrôlé sur des fichiers
-et dans un conteneur, pas encore de bout en bout sur la machine physique, la
-reconstruction complète sur une machine neuve et le remplacement de la vraie base du club par un export,
+comptes de la section « Les comptes » depuis une installation **neuve** où
+l'installateur Debian crée `sysadmin` (il a été vérifié sur la machine physique, mais
+après réparation à la main de ses comptes), le certificat de **production** et la
+restauration du club sur la machine physique, la reconstruction complète sur une
+machine neuve et le remplacement de la vraie base du club par un export,
 la règle de pare-feu `backup_target_client_cidrs` (elle demande deux machines),
-l'élagage depuis la cible, la surveillance RAID et SMART (une VM n'expose pas de SMART)
+l'élagage depuis la cible, la surveillance RAID et SMART (la machine physique est
+installée, mais ses sorties `/proc/mdstat` et `smartctl` n'ont pas encore été relevées)
 et la migration depuis Debian 12.
 
 ## Sauvegardes

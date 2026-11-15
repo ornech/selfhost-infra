@@ -11,6 +11,19 @@
     quiet: true
   when: images_require_digest
 
+# Sans ce contrôle, un secret absent ne se voit qu'au démarrage du conteneur
+# (« no such secret », code 125), après plusieurs tentatives.
+- name: Garde-fou - tous les secrets réclamés existent dans vault_app_secrets
+  ansible.builtin.assert:
+    that: apps_required_secrets | difference(vault_app_secrets | default({}) | list) | length == 0
+    fail_msg: >-
+      Secrets réclamés par les applications et absents de vault_app_secrets
+      (group_vars/all/vault.yml) : {{ apps_required_secrets | difference(vault_app_secrets | default({}) | list) | join(', ') }}.
+      Les ajouter sous la clé existante vault_app_secrets avec ansible-vault edit
+      (README, « Application avec base de données »), ou retirer l'application
+      de public_hosts / private_hosts.
+    quiet: true
+
 - name: UID de l'utilisateur des applications
   ansible.builtin.getent:
     database: passwd

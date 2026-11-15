@@ -39,7 +39,9 @@ propagation latérale.
   uniquement, filtré deux fois : nftables puis HAProxy).
 - Applications sous un utilisateur non privilégié (Podman rootless) :
   une évasion de conteneur ne donne pas root.
-- *Phase serveur physique* : DMZ sur VLAN dédié derrière OPNsense.
+- Le serveur est directement derrière la Freebox, sans DMZ dédiée : seuls les ports
+  80 et 443 sont redirigés (point 6) et le pare-feu de l'hôte refuse tout le reste.
+  Une DMZ séparée serait une amélioration possible, elle n'est pas en place.
 
 ## 3. La chaîne d'approvisionnement est une surface d'attaque
 
@@ -66,6 +68,11 @@ toujours par une personne : compte compromis, hameçonnage.
 - SSH par clé uniquement, pas de mot de passe, root interdit, joignable
   seulement depuis le LAN et le VPN : deux facteurs de possession
   indépendants (clé WireGuard, clé SSH protégée par passphrase).
+- Un seul compte d'administration, **générique** (`sysadmin`) : les personnes sont
+  des clés dans `admin_ssh_pubkeys`, pas des comptes, et aucun compte n'est destiné
+  aux utilisateurs ordinaires. `root` n'existe qu'au clavier de la machine. Le
+  verrouillage de SSH se fait en deux temps : rien n'est interdit tant que la
+  connexion par clé n'a pas été testée, pour qu'une erreur ne ferme pas l'accès.
 - Aucune interface d'administration exposée à Internet.
 - Secrets dans Ansible Vault, jamais en clair dans Git ni dans les fichiers de
   configuration des applications (secrets Podman).
