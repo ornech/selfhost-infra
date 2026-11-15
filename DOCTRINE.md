@@ -73,7 +73,14 @@ toujours par une personne : compte compromis, hameçonnage.
   aux utilisateurs ordinaires. `root` n'existe qu'au clavier de la machine. Le
   verrouillage de SSH se fait en deux temps : rien n'est interdit tant que la
   connexion par clé n'a pas été testée, pour qu'une erreur ne ferme pas l'accès.
-- Aucune interface d'administration exposée à Internet.
+- Les interfaces d'administration sont **privées** (frontal `:8443`, réseaux
+  d'administration seulement), à **une exception assumée** : l'administration de
+  Ghost (`/ghost/`) reste joignable depuis Internet. Elle n'est protégée que par
+  l'authentification : un mot de passe (Ghost n'en exige que 10 caractères, à
+  choisir longs et uniques) et un code envoyé par courriel pour tout nouvel
+  appareil, à chaque connexion si la double authentification de Ghost
+  (`require_email_mfa`, réglages « Staff ») est activée. La restreindre aux réseaux
+  d'administration reste possible.
 - Secrets dans Ansible Vault, jamais en clair dans Git ni dans les fichiers de
   configuration des applications (secrets Podman).
 
