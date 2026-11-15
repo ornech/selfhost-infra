@@ -404,6 +404,11 @@ curl -skI https://inconnu.example.fr # connexion coupée sans réponse
   d'admin, hôte inconnu coupé) ; CrowdSec avec le dépôt `any/any`, bouncer
   nftables qui applique puis retire une décision, lecture des journaux HAProxy
   et SSH.
+  - Hook de déploiement de certbot, lancé de force par
+    `certbot renew --dry-run --run-deploy-hooks` : le renouvellement simulé réussit
+    avec le jeton Cloudflare, le fichier `/etc/haproxy/certs/<domaine>.pem` est
+    réassemblé (sa date est celle du test) et HAProxy se recharge dans la même
+    seconde, puis reste `active`.
 - `backup` (dépôt local `/srv/backup/restic`, puis dépôt distant sur `rest-server`) :
   - Déploiement, simulation `--check` sans erreur, rejeu à `changed=0`.
   - Export MySQL lancé par systemd sous `NoNewPrivileges` ; `club.sql` produit ; le volume
@@ -445,9 +450,10 @@ avec `runuser`, `cscli` et `restic` ; nginx sans privilège avec `ReadOnly=true`
 et un dossier hôte monté ; le format JSON de `cscli bouncers list` selon la
 version de CrowdSec. Un contrôle qui échoue s'affiche « inconnu » avec sa cause.
 
-**Non vérifié** : le hook de déploiement lancé par certbot au renouvellement (le
-renouvellement simulé `certbot renew --dry-run` réussit), la reconstruction complète
-sur une machine neuve et le remplacement de la vraie base du club par un export,
+**Non vérifié** : un vrai renouvellement lancé par la minuterie de certbot (le
+renouvellement simulé et le hook réussissent, mais le hook n'a tourné que sur le
+certificat déjà en place, pas sur un certificat fraîchement émis), la reconstruction
+complète sur une machine neuve et le remplacement de la vraie base du club par un export,
 la règle de pare-feu `backup_target_client_cidrs` (elle demande deux machines),
 l'élagage depuis la cible, la surveillance RAID et SMART (une VM n'expose pas de SMART)
 et la migration depuis Debian 12.
